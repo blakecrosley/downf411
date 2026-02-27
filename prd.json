@@ -1,0 +1,565 @@
+{
+  "project": {
+    "name": "Short Game",
+    "description": "AI-powered paper trading simulator focused on short selling. Single-player game for Blake. Player starts at $10k, aims for $10M through repeated short-selling scalps. Core thesis: AI disruption craters specific company categories. Domain: downf411.com (Cloudflare Access)."
+  },
+  "version": "1.2.0",
+  "constraints": [
+    "SINGLE-PLAYER game — one user (Blake), no multi-user auth",
+    "FastAPI + HTMX + Alpine.js + Bootstrap 5 + plain CSS — NO Tailwind, NO React, NO build tools",
+    "PostgreSQL on Railway — NUMERIC(18,4) for ALL money columns, Python Decimal throughout",
+    "SQLAlchemy 2.0 async with asyncpg — no sync sessions",
+    "APScheduler in-process — NOT Celery, NOT Redis",
+    "Claude Opus as primary AI brain — orchestrates multi-engine prediction ensemble. Model: claude-opus-4-6. NEVER OpenAI for production predictions, NEVER Sonnet/Haiku",
+    "Finnhub for market data — 60 calls/min free tier via finnhub-python",
+    "Cloudflare Access for auth — zero application-level auth code",
+    "Multi-engine prediction from Day 1: Claude Opus engine + Quantitative engine + Ensemble arbitrator. Claude analyzes fundamentals/sentiment, Quant uses technical indicators, Ensemble (Claude) arbitrates disagreements",
+    "Multi-engine pattern: Prediction engines propose (Claude + Quant), Claude arbitrates into ensemble signal, RiskEngine vetoes — separate domain services",
+    "All monetary arithmetic uses Decimal, NEVER float",
+    "API response envelope: {\"data\": ..., \"meta\": {\"timestamp\": ..., \"market_open\": bool}}",
+    "No TODO/FIXME/HACK in committed code",
+    "exchange_calendars for all business day calculations",
+    "Claude API calls use tool_use (structured output) — NOT JSON-in-text parsing",
+    "ServiceContainer pattern for dependency injection (Anthropic client, Finnhub adapter, scheduler)",
+    "HTMX partials on separate router from JSON API — partials return HTML, API returns JSON",
+    "Prompt text stored in prompts/ directory as .txt files, loaded at startup"
+  ],
+  "stories": [
+    {
+      "id": 1,
+      "title": "Project scaffold",
+      "description": "Create ~/Projects/short-game/ with full directory structure, FastAPI app factory, configuration, and dependency injection infrastructure.\n\nDirectory structure:\n```\nshort-game/\n  app/\n    __init__.py\n    main.py          # FastAPI app factory, lifespan\n    config.py         # pydantic-settings from .env\n    container.py      # ServiceContainer for DI\n    db/\n      __init__.py\n      models.py\n      session.py\n    api/\n      __init__.py\n      v1/\n        __init__.py\n        router.py     # JSON API router\n        partials.py   # HTMX HTML fragment router\n        deps.py       # FastAPI dependency providers\n    domain/\n      __init__.py\n      market/\n        __init__.py\n      game/\n        __init__.py\n        rules/\n          __init__.py\n      prediction/\n        __init__.py\n      alerts/\n        __init__.py\n    schemas/\n      __init__.py\n    templates/\n      partials/       # HTMX partial templates\n    static/\n      css/\n      js/\n    config/\n      __init__.py\n      ticker_thesis.py\n      settings.py\n  prompts/\n    signal_system.txt   # Claude signal system prompt\n    briefing_system.txt # Claude briefing system prompt\n  scripts/\n  tests/\n    __init__.py\n    conftest.py\n    fixtures/         # JSON fixtures for Claude response mocking\n  alembic/\n    env.py\n```\n\nDependencies in pyproject.toml: fastapi, uvicorn[standard], sqlalchemy[asyncio], asyncpg, psycopg[binary], pydantic-settings, apscheduler, finnhub-python, jinja2, anthropic, exchange-calendars, httpx, alembic, python-dotenv, numpy, slowapi.\n\nDev dependencies: pytest, pytest-asyncio, pytest-cov, httpx (for TestClient).\n\n.env.example: DATABASE_URL, ANTHROPIC_API_KEY, FINNHUB_API_KEY, LOG_LEVEL=INFO, PORT=8000\n\napp/config.py uses pydantic-settings Settings class loading from .env.\n\napp/container.py — ServiceContainer for dependency injection:\n```python\nclass ServiceContainer:\n    \"\"\"Holds singletons for services that need shared state (Anthropic client, scheduler, etc.).\"\"\"\n    def __init__(self, settings: Settings, session_factory):\n        self.settings = settings\n        self.session_factory = session_factory\n        self.anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)\n        self.finnhub = FinnhubAdapter(api_key=settings.FINNHUB_API_KEY)\n        # Populated on scheduler init\n        self.scheduler: AsyncScheduler | None = None\n```\nStore on `app.state.container` during lifespan. All domain services receive the container or its components via FastAPI `Depends()`.\n\napp/main.py: FastAPI app factory with lifespan context manager. Lifespan creates ServiceContainer, stores on app.state, starts scheduler, yields, then shuts down scheduler.\n\nalembic/env.py must load DATABASE_URL from app.config:\n```python\nfrom app.config import settings\nconfig.set_main_option('sqlalchemy.url', settings.DATABASE_URL.replace('+asyncpg', ''))\n```\nUse sync psycopg for Alembic migrations (not asyncpg). Alembic runs synchronously before uvicorn starts.\n\nGET /v1/health returns {\"data\": {\"status\": \"ok\"}, \"meta\": {}}.\n\nCLAUDE.md with project-specific instructions (stack, two-engine pattern, game rules, API conventions).",
+      "priority": 1,
+      "phase": "foundation",
+      "passes": false,
+      "verification": "automated",
+      "acceptance": [
+        "uvicorn app.main:app starts without errors",
+        "GET /v1/health returns {\"data\": {\"status\": \"ok\"}, \"meta\": {}}",
+        "All __init__.py files exist for every package",
+        "pyproject.toml has all listed dependencies including slowapi",
+        ".env.example contains all required environment variables",
+        "CLAUDE.md exists with project context",
+        "ServiceContainer instantiated during lifespan with Anthropic client, Finnhub adapter, session factory",
+        "app.state.container accessible from FastAPI request",
+        "alembic/env.py loads DATABASE_URL from app.config (sync psycopg, not asyncpg)",
+        "prompts/ directory exists with signal_system.txt and briefing_system.txt",
+        "tests/fixtures/ directory exists"
+      ],
+      "wave": 1,
+      "wave_name": "Foundation",
+      "status": "pending"
+    },
+    {
+      "id": 2,
+      "title": "PostgreSQL models and migrations",
+      "description": "Set up async PostgreSQL with SQLAlchemy 2.0 and create all domain models.\n\napp/db/session.py: async engine factory + async session maker using DATABASE_URL from config.\n\nalembic.ini + alembic/env.py configured for async SQLAlchemy.\n\nAll models in app/db/models.py with NUMERIC(18,4) for money columns:\n\n- Portfolio: id, cash (NUMERIC), highest_milestone_reached (Integer default 0), created_at, updated_at\n- Watchlist: id, ticker, thesis_category, thesis_text, short_interest_pct (NUMERIC), days_to_cover (NUMERIC), borrow_rate_annual (NUMERIC), prev_borrow_rate (NUMERIC), si_updated_at, si_source, active, created_at\n- Position: id, portfolio_id (FK->portfolios), watchlist_id (FK->watchlist nullable), ticker, shares (int), entry_price (NUMERIC), current_price (NUMERIC), stop_loss (NUMERIC), take_profit (NUMERIC), borrow_rate (NUMERIC — snapshot from Watchlist at open), margin_deposited (NUMERIC — initial margin locked at open = shares * entry_price * 1.5), accrued_borrow_fees (NUMERIC default 0.0000), status (OPEN/CLOSED/LIQUIDATED), opened_at, closed_at, close_price (NUMERIC), realized_pnl (NUMERIC)\n- Order: id, portfolio_id (FK), position_id (FK nullable), ticker, side (SHORT_OPEN/SHORT_CLOSE), shares, price (NUMERIC), status (PENDING/FILLED/REJECTED), reason (nullable), created_at, filled_at\n- Trade: id, position_id (FK->positions), order_id (FK), ticker, shares, entry_price (NUMERIC), exit_price (NUMERIC nullable), gross_pnl (NUMERIC nullable), fees_total (NUMERIC), net_pnl (NUMERIC nullable), opened_at, closed_at (nullable)\n- Signal: id, ticker, signal_type, direction, confidence (int 0-100), entry_price (NUMERIC), stop_loss (NUMERIC), target (NUMERIC), time_horizon_days (int), reasoning (JSON), catalyst, schema_version, data_quality, created_at\n- Prediction: id, signal_id (FK), ticker, predicted_direction, confidence (int), outcome_pnl (NUMERIC nullable), outcome_correct (bool nullable), evaluated_at (nullable)\n- Alert: id, alert_type, priority (CRITICAL/WARNING/INFO), message, ticker (nullable), acknowledged (bool default false), created_at, acknowledged_at (nullable)\n- DayTradeLog: id, portfolio_id (FK), ticker, trade_date, created_at\n- Briefing: id, headline, summary, top_3 (JSON), avoid_list (JSON), market_context, signal_ids (JSON — list of Signal IDs used to generate this briefing), created_at\n- PortfolioSnapshot: id, portfolio_id (FK), date (unique per portfolio), equity (NUMERIC), cash (NUMERIC), unrealized_pnl (NUMERIC), open_position_count (int), created_at. Created at EOD mark-to-market (16:00 ET cycle). Used for /v1/portfolio/history and Chart.js P&L chart.\n\nRelationships:\n- Position.trades -> list[Trade] (one-to-many: a position has one opening trade and one closing trade)\n- Position.watchlist -> Watchlist (many-to-one via watchlist_id, nullable for flexibility)\n- Briefing.signal_ids links to originating signals (JSON array, not FK — signals may be deleted independently)\n\nRequired database indexes (add to initial migration):\n```python\nIndex('ix_positions_portfolio_status', Position.portfolio_id, Position.status, postgresql_where=Position.status == 'OPEN')\nIndex('ix_alerts_unacknowledged', Alert.acknowledged, Alert.created_at, postgresql_where=Alert.acknowledged == False)\nIndex('ix_signals_created_at', Signal.created_at.desc())\nIndex('ix_day_trade_log_date', DayTradeLog.portfolio_id, DayTradeLog.trade_date)\nIndex('ix_predictions_outcome', Prediction.outcome_correct, postgresql_where=Prediction.outcome_correct.isnot(None))\nIndex('ix_portfolio_snapshots_portfolio_date', PortfolioSnapshot.portfolio_id, PortfolioSnapshot.date)\n```\n\nSeed script scripts/seed_watchlist.py:\n- Creates Portfolio with $10,000 cash\n- Inserts 5 watchlist tickers with thesis text and hardcoded SI values:\n  DUOL: SI 8.2%, DTC 2.1, borrow 3.5%, category 'AI Disruption - EdTech'\n  CRM: SI 3.1%, DTC 1.8, borrow 1.2%, category 'AI Disruption - Enterprise SaaS'\n  ZIP: SI 15.4%, DTC 3.8, borrow 8.7%, category 'AI Disruption - Recruitment'\n  LYFT: SI 6.7%, DTC 2.4, borrow 4.1%, category 'AI Disruption - Rideshare/Autonomy'\n  UBER: SI 4.3%, DTC 1.5, borrow 2.0%, category 'AI Disruption - Rideshare/Delivery Platform'",
+      "priority": 2,
+      "phase": "foundation",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        1
+      ],
+      "acceptance": [
+        "alembic upgrade head creates all tables including portfolio_snapshots without errors",
+        "alembic downgrade base && alembic upgrade head round-trips cleanly",
+        "scripts/seed_watchlist.py populates 5 watchlist rows and 1 portfolio with $10,000 cash (idempotent — skips if already seeded)",
+        "All money columns use NUMERIC(18,4) — verified in migration SQL",
+        "All models have proper foreign key relationships",
+        "Portfolio.highest_milestone_reached column exists with default 0",
+        "Position has borrow_rate, margin_deposited, accrued_borrow_fees columns",
+        "Position.watchlist_id FK exists (nullable)",
+        "Trade.position_id FK to positions exists",
+        "PortfolioSnapshot model exists with portfolio_id, date, equity, cash, unrealized_pnl, open_position_count",
+        "Briefing model exists with headline, summary, top_3 (JSON), avoid_list (JSON), market_context, signal_ids (JSON) fields",
+        "All 6 database indexes created in initial migration",
+        "Seed script is idempotent (checks existing count before inserting)"
+      ],
+      "wave": 1,
+      "wave_name": "Foundation",
+      "status": "pending"
+    },
+    {
+      "id": 3,
+      "title": "Finnhub market data adapter",
+      "description": "Build the market data layer with Protocol-based abstraction and Finnhub implementation.\n\napp/domain/market/schemas.py: Pydantic models for Quote (price, change_pct, volume, timestamp) and Bar (date, open, high, low, close, volume).\n\napp/domain/market/provider.py: MarketDataProvider Protocol with methods:\n- get_quote(ticker) -> Quote\n- get_candles(ticker, days=20) -> list[Bar]\n- get_news(ticker, days=7, limit=8) -> list[NewsItem]\n- get_recommendation(ticker) -> RecommendationTrend\n- get_earnings(ticker) -> EarningsCalendar\n- get_short_interest(ticker) -> ShortInterest | None  (optional, may return None)\n\napp/domain/market/finnhub_adapter.py: FinnhubAdapter implementing the Protocol using finnhub-python.\n\nCall sequence per ticker (5 required + 1 optional):\n1. /stock/candle (symbol, resolution=D, from=20d ago, to=today) — REQUIRED\n2. /quote (symbol) — REQUIRED\n3. /company-news (symbol, from=7d ago, to=today, take first 8) — OPTIONAL\n4. /stock/recommendation (symbol) — OPTIONAL\n5. /calendar/earnings (symbol) — OPTIONAL\n6. /stock/short-interest (symbol, from=30d ago) — OPTIONAL, if 403/empty fall back to Watchlist stored values\n\nRetry policy: 3 attempts per call, exponential backoff [1s, 2s, 4s]. After 3 failures, mark call as failed.\n\nPostgreSQL-backed quote cache with TTL (1 min during market hours, 15 min off-hours). Store in a simple cache table or use in-memory dict with TTL.\n\nCircuit breaker: 3 failures in 60 seconds -> 5 minute cooldown, serve cached data during cooldown. Circuit breaker is in-memory (resets on app restart — this is acceptable, restart is itself recovery).\n\n```python\nclass CircuitBreaker:\n    def __init__(self, failure_threshold=3, window_seconds=60, cooldown_seconds=300):\n        self.failures: deque[float] = deque()\n        self.tripped_at: float | None = None\n```\n\nGet Finnhub client from ServiceContainer (app.state.container.finnhub), not by creating a new instance.",
+      "priority": 3,
+      "phase": "foundation",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        1,
+        2
+      ],
+      "acceptance": [
+        "FinnhubAdapter implements MarketDataProvider Protocol",
+        "get_quote returns a Quote with price > 0 for a valid ticker",
+        "get_candles returns 20 Bar objects for a valid ticker",
+        "Retry policy retries 3 times with backoff on failure (tested with mock)",
+        "Circuit breaker trips after 3 failures in 60s (tested with mock)",
+        "Cache returns cached Quote on second call within TTL (no API call)",
+        "get_short_interest returns None gracefully on 403/empty response"
+      ],
+      "wave": 2,
+      "wave_name": "Data & Domain",
+      "status": "pending"
+    },
+    {
+      "id": 4,
+      "title": "Game engine, risk engine, and rule modules",
+      "description": "Implement the two-engine decisioning pattern with all short selling rule modules.\n\napp/domain/game/engine.py — ShortGameEngine:\n- open_short(portfolio_id, ticker, shares, entry_price) -> Order\n  - Validates via RiskEngine.check_entry() first\n  - Creates Order (SHORT_OPEN), Position, deducts margin from cash\n- close_short(position_id, exit_price) -> Trade\n  - Calculates P&L: (entry_price - exit_price) * shares for shorts\n  - Adds proceeds back to cash, closes position\n  - Records in Trade table\n- mark_to_market(portfolio_id, quotes) -> list[Alert]\n  MUST execute in this exact 5-phase order within a single DB transaction:\n  Phase 1: Update all prices (no side effects) — pos.current_price = quotes[pos.ticker].price\n  Phase 2: Accrue borrow fees — fee = daily_borrow_fee(shares, current_price, pos.borrow_rate); pos.accrued_borrow_fees += fee; portfolio.cash -= fee. Fees reduce cash BEFORE margin check.\n  Phase 3: Check stop-loss / take-profit (voluntary exits first) — stop_loss auto-closes (CRITICAL alert), take_profit is advisory only (WARNING alert, NO auto-close). If a position hits stop-loss, remove from remaining positions list before Phase 4.\n  Phase 4: Check margin on remaining positions (largest-loss-first) — for each position sorted by unrealized_pnl ascending: if ratio < 1.10 -> forced liquidation + recalculate portfolio after each close (prevents over-liquidation); if ratio < 1.30 -> CRITICAL margin call alert; if ratio < 1.40 -> WARNING margin alert.\n  Phase 5: Milestone check — calculate equity, compare to highest_milestone_reached, create alert if new milestone.\n  At EOD (16:00 ET cycle): create PortfolioSnapshot row with current equity, cash, unrealized_pnl, open_position_count.\n\n  Key design decisions:\n  - Stop-loss fires BEFORE margin check — if a position hits both stop-loss and margin breach, stop-loss closes it first, freeing cash for remaining positions.\n  - Forced liquidation processes largest-loss-first and recalculates portfolio after each close.\n  - Borrow fees accrue before margin check — a fee can push 131% to 129%, triggering margin call.\n  - Partial closes NOT supported in Round 1 — all closes are full position closes.\n  - Weekend/holiday borrow fees: fees accrue on market days only. Monday MtM accrues 1 day, not 3.\n\napp/domain/game/risk_engine.py — RiskEngine:\n- check_entry(portfolio, ticker, shares, price) -> EntryCheck (approved: bool, reason: str)\n  - Cash >= initial margin required (shares * price * 1.5)\n  - PDT check\n  - Squeeze risk check\n- check_maintenance(position) -> MaintenanceCheck\n  - Margin ratio calculation\n  - Warning at 140%, call at 130%, liquidation at 110%\n- check_squeeze(position, squeeze_result) -> SqueezeCheck\n  - CRITICAL squeeze vetoes new entries\n\nRule modules:\n\napp/domain/game/rules/margin.py:\n- initial_margin(shares, price) -> Decimal  # shares * price * 1.5\n- margin_ratio(position) -> Decimal  # (cash + short_proceeds) / (shares * current_price)\n- INITIAL_MARGIN_PCT = Decimal('1.5')\n- MAINTENANCE_MARGIN_PCT = Decimal('1.3')\n- LIQUIDATION_MARGIN_PCT = Decimal('1.1')\n\napp/domain/game/rules/pdt.py:\n- is_pdt_blocked(portfolio, trade_date, *, is_forced: bool = False) -> bool\n  If is_forced=True: return False (forced liquidation overrides PDT)\n  Otherwise: 3 day-trades in 5 rolling business days under $25k equity\n- PDT_THRESHOLD = Decimal('25000')\n- PDT_MAX_DAY_TRADES = 3\n- PDT_ROLLING_DAYS = 5\n\napp/domain/game/rules/borrow_fee.py:\n- daily_borrow_fee(shares, price, annual_rate) -> Decimal  # (shares * price * rate) / 360\n\napp/domain/game/rules/dividend.py:\n- dividend_liability(shares, dividend_per_share) -> Decimal\n\napp/domain/game/rules/squeeze.py — COMPLETE IMPLEMENTATION FROM SPEC:\n\n```python\nclass SqueezeLevel(IntEnum):\n    LOW = 0\n    MEDIUM = 1\n    HIGH = 2\n    CRITICAL = 3\n\nLEVEL_SCORES = {LOW: 0, MEDIUM: 33, HIGH: 67, CRITICAL: 100}\n\ndef classify_squeeze_risk(si_pct, days_to_cover, borrow_rate, borrow_rate_prev) -> SqueezeResult:\n    # Weighted: 0.35*SI + 0.25*DTC + 0.20*CTB + 0.20*CTB_spike\n    # Thresholds:\n    #   SI: LOW <10%, MED 10-20%, HIGH 20-40%, CRIT >40%\n    #   DTC: LOW <3, MED 3-5, HIGH 5-8, CRIT >8\n    #   CTB: LOW <5%, MED 5-20%, HIGH 20-50%, CRIT >50%\n    #   CTB spike: LOW <2x, MED 2-3x, HIGH 3-5x, CRIT >5x\n    # Overall: LOW <30, MED 30-54, HIGH 55-74, CRIT >=75\n    # Override: any single factor CRITICAL -> overall CRITICAL\n```\n\napp/domain/game/rules/liquidation.py:\n- forced_liquidation_order(position) -> Order\n\napp/domain/game/rules/kelly.py:\n- kelly_position_size(equity, win_rate, avg_win, avg_loss) -> Decimal\n- Disabled until 20 trades, max 25% of equity, min 1%\n\nFull test suite required covering all edge cases listed in acceptance criteria.",
+      "priority": 4,
+      "phase": "foundation",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        2
+      ],
+      "acceptance": [
+        "Open 100-share short on $50 stock requires $7,500 margin (150%)",
+        "Price rises to $55 -> unrealized loss of $500, margin ratio correctly calculated",
+        "Maintenance margin warning fires at ratio < 130%",
+        "Forced liquidation triggers at ratio < 110%",
+        "PDT blocks 4th day-trade under $25k equity",
+        "PDT allows 4th day-trade at $25k+ equity",
+        "Forced liquidation bypasses PDT (is_forced=True)",
+        "Borrow fee: (100 * 48.50 * 0.025) / 360 = $0.3368/day",
+        "Squeeze: GME-like inputs (SI=140%, DTC=6.5, borrow=80%, prev=15%) -> CRITICAL",
+        "Squeeze: Normal stock (SI=3%, DTC=1.8, borrow=1.2%, prev=1.0%) -> LOW with score < 30",
+        "Squeeze: Single factor CRITICAL with rest LOW -> override to CRITICAL",
+        "Squeeze: All MEDIUM -> score ~33, level MEDIUM",
+        "RiskEngine vetoes entry when cash < initial margin required",
+        "RiskEngine vetoes entry when squeeze risk is CRITICAL",
+        "Kelly returns 0 when fewer than 20 trades",
+        "Kelly caps at 25% of equity even if formula suggests more",
+        "Close short calculates correct P&L: (entry - exit) * shares",
+        "Mark-to-market Phase 1-5 order verified: prices -> fees -> stop-loss -> margin -> milestones",
+        "Stop-loss auto-closes but take-profit is advisory only (no auto-close)",
+        "Forced liquidation processes largest-loss-first with portfolio recalc after each",
+        "Borrow fee accrual before margin check can trigger margin call",
+        "EOD mark-to-market creates PortfolioSnapshot row",
+        "Kelly division-by-zero with all wins returns max 25% cap"
+      ],
+      "wave": 2,
+      "wave_name": "Data & Domain",
+      "status": "pending"
+    },
+    {
+      "id": 5,
+      "title": "Signal schemas, ticker thesis registry, and configuration constants",
+      "description": "Create the Pydantic validation models for Claude responses, the ticker thesis data, and all game configuration constants.\n\napp/schemas/signal.py — Pydantic models for Claude response validation:\n\n```python\nclass Direction(str, Enum): SHORT, HOLD, AVOID\nclass SqueezeRiskLevel(str, Enum): LOW, MEDIUM, HIGH, CRITICAL\nclass BorrowAvailability(str, Enum): EASY, NORMAL, TIGHT, HARD_TO_BORROW\nclass Volatility(str, Enum): LOW, MEDIUM, HIGH, EXTREME\n\nclass Prediction(BaseModel):\n    direction: Direction\n    confidence: int = Field(ge=0, le=100)\n    entry_price: float = Field(gt=0)\n    stop_loss: float = Field(gt=0)  # MUST be above entry for shorts\n    target: float = Field(gt=0)  # MUST be below entry for shorts\n    time_horizon_days: int = Field(ge=1, le=30)\n    reasoning: list[str] = Field(min_length=1, max_length=5)\n    catalyst: str\n\n    # Validators: stop_loss > entry_price, target < entry_price\n\nclass RiskAssessment(BaseModel):\n    squeeze_probability: SqueezeRiskLevel\n    borrow_availability: BorrowAvailability\n    volatility: Volatility\n    warnings: list[str] = Field(default_factory=list, max_length=5)\n\nclass ClaudeSignalResponse(BaseModel):\n    schema_version: Literal['v1']\n    ticker: str = Field(pattern=r'^[A-Z]{1,5}$')\n    as_of: str = Field(pattern=r'^\\d{4}-\\d{2}-\\d{2}$')\n    prediction: Prediction\n    risk_assessment: RiskAssessment\n```\n\napp/config/ticker_thesis.py — Thesis registry:\nDUOL: EdTech, AI tutors commoditizing Duolingo's language lessons\nCRM: Enterprise SaaS, AI agents automating sales workflows\nZIP: Recruitment, LLM-powered recruiting tools displacing job boards\nLYFT: Rideshare, no autonomous vehicle program, existential vulnerability\nUBER: Rideshare/Delivery, autonomous competition for core rideshare\n\n(Full thesis text for each as specified in synthesis.md)\n\napp/config/settings.py additions:\n- DAILY_SCAN_HOUR_ET = 4, INTRADAY_REFRESH_MINUTES = 30\n- CLAUDE_MODEL = 'claude-opus-4-6', CLAUDE_TEMPERATURE = 0.2\n- CLAUDE_MAX_TOKENS_SIGNAL = 400, CLAUDE_MAX_TOKENS_BRIEFING = 300\n- MIN_ACTIONABLE_CONFIDENCE = 55, HIGH_CONFIDENCE_THRESHOLD = 70\n- DEFAULT_POSITION_PCT = 5.0, KELLY_MIN_TRADES = 20\n- SI_STALE_THRESHOLD_DAYS = 14\n- FINNHUB_MAX_NEWS_ITEMS = 8, FINNHUB_PRICE_HISTORY_DAYS = 20\n- ALERT_MAX_VISIBLE = 3, ALERT_DISMISS_WARNING = 15, ALERT_DISMISS_INFO = 8\n- MILESTONES = [100_000, 150_000, 250_000, 500_000, 1_000_000]\n- STREAK_FIRE_THRESHOLD = 5",
+      "priority": 5,
+      "phase": "playable",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        1
+      ],
+      "acceptance": [
+        "ClaudeSignalResponse validates a well-formed JSON response with schema_version v1",
+        "ClaudeSignalResponse rejects response where stop_loss <= entry_price",
+        "ClaudeSignalResponse rejects response where target >= entry_price",
+        "ClaudeSignalResponse rejects confidence outside 0-100 range",
+        "Each of 5 tickers has non-empty thesis text and category in registry",
+        "All configuration constants are importable from app.config.settings",
+        "Unit test verifies every ticker in TICKER_THESIS matches watchlist seed data"
+      ],
+      "wave": 1,
+      "wave_name": "Foundation",
+      "status": "pending"
+    },
+    {
+      "id": 6,
+      "title": "Technical indicators module",
+      "description": "Create pure functions for technical indicator computation. These are injected into the Claude prompt as context. These feed both the Claude prompt context and the quantitative prediction engine.\n\napp/domain/prediction/technicals.py:\n\n```python\nclass TechnicalIndicators(NamedTuple):\n    rsi_14: float\n    momentum_5d_pct: float\n    momentum_10d_pct: float\n    momentum_20d_pct: float\n    volatility_20d: float\n\ndef compute_technicals(closes: list[float]) -> TechnicalIndicators:\n    # Requires 20 closing prices, oldest first\n    # RSI-14: gains/losses over last 14 periods\n    # Momentum: percentage change over 5/10/20 days\n    # Volatility: annualized std of daily returns (sqrt(252))\n```\n\nUses numpy for computation. All return values rounded appropriately (RSI to 1 decimal, momentum to 2 decimals, volatility to 4 decimals).",
+      "priority": 6,
+      "phase": "playable",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        1
+      ],
+      "acceptance": [
+        "compute_technicals with 20 known prices returns expected RSI, momentum, volatility values",
+        "Raises AssertionError if fewer than 20 closes provided",
+        "RSI is between 0 and 100",
+        "Volatility is annualized (multiplied by sqrt(252))",
+        "All return values are properly rounded"
+      ],
+      "wave": 2,
+      "wave_name": "Data & Domain",
+      "status": "pending"
+    },
+    {
+      "id": 7,
+      "title": "Multi-engine prediction system",
+      "description": "Build the multi-engine prediction system with Claude Opus as brain, a quantitative engine for technical signals, and an ensemble arbitrator.\n\nArchitecture: app/domain/prediction/engines/\n```\nengines/\n  __init__.py\n  base.py           # PredictionEngine Protocol\n  claude_engine.py  # Claude Opus fundamental + sentiment analysis\n  quant_engine.py   # Technical indicator-based signals (deterministic)\n  ensemble.py       # Claude Opus arbitrates all engine outputs into final signal\n```\n\n=== Engine Protocol ===\n\napp/domain/prediction/engines/base.py:\n```python\nclass EngineSignal(BaseModel):\n    engine_name: str\n    ticker: str\n    direction: Direction  # SHORT, HOLD, AVOID\n    confidence: int = Field(ge=0, le=100)\n    entry_price: Decimal\n    stop_loss: Decimal\n    target: Decimal\n    reasoning: list[str]\n\nclass PredictionEngine(Protocol):\n    name: str\n    async def generate_signal(self, context: TickerScanContext) -> EngineSignal | None: ...\n```\n\n=== Claude Opus Engine (primary brain) ===\n\napp/domain/prediction/engines/claude_engine.py:\nUses Claude tool_use for structured output (NOT JSON-in-text).\nSystem prompt from prompts/signal_system.txt with cache_control ephemeral.\nAnalyzes: AI disruption thesis, news sentiment, analyst consensus, earnings, short interest context.\nModel: claude-opus-4-6, temperature: 0.2, max_tokens: 400.\nGet Anthropic client from ServiceContainer.\n\n```python\nSIGNAL_TOOL = {\n    'name': 'record_signal',\n    'description': 'Record the trading signal analysis for this ticker.',\n    'input_schema': { ... }  # Full schema matching ClaudeSignalResponse\n}\n# Call with tool_choice={'type': 'tool', 'name': 'record_signal'}\n```\n\nError handling: anthropic.APIConnectionError -> return None, log. RateLimitError -> sleep 60s, retry once.\n\n=== Quantitative Engine (deterministic) ===\n\napp/domain/prediction/engines/quant_engine.py:\nPure computation from technical indicators (S06). No AI calls.\nDeterministic: same inputs always produce same output.\n\nSignal logic:\n- RSI divergence: RSI < 30 = oversold (AVOID short), RSI > 70 = overbought (SHORT signal)\n- Momentum alignment: all 3 momentum windows (5d, 10d, 20d) negative = strong SHORT\n- Volume anomaly: volume > 2x 20-day average = heightened attention\n- Volatility regime: high volatility = wider stops, lower confidence\n\nConfidence scoring:\n- Base 50, +15 for RSI > 70, +10 per aligned momentum window, +10 for volume spike, -15 for RSI < 30\n- Cap at 85 (pure quant never fully confident without fundamentals)\n\n=== Ensemble Arbitrator (Claude as final judge) ===\n\napp/domain/prediction/engines/ensemble.py:\nTakes all engine signals for a ticker. Claude reviews disagreements, weighs evidence, produces final signal.\n\nSystem prompt from prompts/ensemble_system.txt:\n```\nYou are the ensemble arbitrator for ShortGame. You receive signals from multiple prediction engines and synthesize them into a final trading signal.\n\nEngines:\n- claude_engine: Fundamental analysis, news sentiment, AI disruption thesis. Strongest on catalysts and narrative.\n- quant_engine: Technical indicators (RSI, momentum, volume). Strongest on timing and mean reversion.\n\nRules:\n- If both engines agree on direction with combined confidence > 120: high conviction signal.\n- If engines disagree: explain the disagreement. Default to the engine with higher confidence, but flag the disagreement in warnings.\n- Your job is synthesis, not averaging. A 90% Claude SHORT + 40% Quant HOLD is NOT 65% — evaluate WHY they disagree.\n- Never override the risk engine's squeeze assessment.\n```\n\nUses tool_use with ensemble_tool. Model: claude-opus-4-6, temperature: 0.3 (slightly higher for synthesis), max_tokens: 500.\n\n=== Signal Storage ===\n\nSignal model gets new field: engine_source (VARCHAR) — 'claude', 'quant', or 'ensemble'.\nFinal ensemble signal is what gets displayed and traded on. Individual engine signals stored for accuracy tracking.\n\n=== Morning Briefing ===\n\ngenerate_briefing(signals, portfolio_context) uses the ensemble signals + engine agreement metadata.\nBriefing shows: \"Claude and Quant agree on DUOL SHORT (high conviction)\" or \"Engines split on CRM — Claude says SHORT, Quant says HOLD.\"\nSystem prompt from prompts/briefing_system.txt.",
+      "priority": 7,
+      "phase": "playable",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        5,
+        6
+      ],
+      "acceptance": [
+        "PredictionEngine Protocol defines name and generate_signal method",
+        "Claude engine uses tool_use with tool_choice (NOT JSON-in-text)",
+        "Claude engine system prompt loaded from prompts/signal_system.txt with cache_control ephemeral",
+        "Claude engine model is claude-opus-4-6, temperature 0.2",
+        "Quant engine produces deterministic signal from technical indicators (same inputs = same output)",
+        "Quant engine confidence capped at 85",
+        "Quant engine RSI > 70 adds +15 confidence, RSI < 30 subtracts -15",
+        "Ensemble arbitrator uses tool_use with ensemble_tool",
+        "Ensemble system prompt loaded from prompts/ensemble_system.txt",
+        "Ensemble explains engine disagreements in reasoning field",
+        "Signal model has engine_source field ('claude', 'quant', 'ensemble')",
+        "All 3 engines implement PredictionEngine Protocol",
+        "Morning briefing references engine agreement/disagreement",
+        "Anthropic client obtained from ServiceContainer (not instantiated per-call)",
+        "anthropic.APIConnectionError returns None (not exception)",
+        "anthropic.RateLimitError sleeps 60s and retries once"
+      ],
+      "wave": 3,
+      "wave_name": "AI Core",
+      "status": "pending"
+    },
+    {
+      "id": 8,
+      "title": "Daily scan pipeline",
+      "description": "Build the orchestration layer that collects market data, computes indicators, and generates Claude signals for all watchlist tickers.\n\nscripts/daily_scan.py — triggered by APScheduler at 04:00 ET.\n\nPipeline per ticker:\n1. Collect Finnhub data (5 calls: candle, quote, news, recommendation, earnings + optional SI)\n2. Classify data quality: COMPLETE (all 3 optional present), PARTIAL (1-2 optional present), STALE (0 optional present), INCOMPLETE (candle or quote missing -> skip ticker)\n3. Compute technicals from candle data\n4. Compute squeeze risk from stored SI data\n5. Run all prediction engines (Claude + Quant) in parallel\n6. Run ensemble arbitrator on combined signals\n7. Persist all Signal rows (per-engine + ensemble) and Prediction rows to database\n\nAfter all tickers processed:\n8. If >= 2 signals succeeded: generate morning briefing, persist Briefing row, create INFO alert 'Morning briefing ready'\n9. If < 2 signals succeeded: create CRITICAL alert 'Daily scan degraded - {n}/5 tickers scanned'\n\nData quality classification:\n```python\ndef classify_data_quality(scan_result):\n    if candles is None or quote is None: return 'INCOMPLETE'\n    optional_count = sum([news is not None, recommendation is not None, earnings is not None])\n    if optional_count == 3: return 'COMPLETE'\n    elif optional_count >= 1: return 'PARTIAL'\n    else: return 'STALE'\n```\n\nError handling:\n- If candle OR quote fails: skip ticker entirely, log error\n- If optional endpoint fails: continue with available data, set PARTIAL, add warning\n- Each ticker is a separate DB transaction — if killed mid-scan, completed tickers are persisted\n- Anthropic errors: catch anthropic.APIConnectionError (return None, log ANTHROPIC_DOWN), catch anthropic.RateLimitError (sleep 60s, retry once)\n- Retry policy: 3 attempts, backoff [1s, 2s, 4s] (Finnhub only)\n\nTotal: 25-30 Finnhub calls + 5 Claude signal calls + 5 Claude ensemble calls + 1 Claude briefing = 36 API calls per daily scan. Well within 60/min Finnhub limit. Quant engine adds zero API calls (pure computation).",
+      "priority": 8,
+      "phase": "playable",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        3,
+        4,
+        7
+      ],
+      "acceptance": [
+        "daily_scan produces Signal rows for each watchlist ticker with valid data",
+        "Ticker with missing candle data is skipped (no Claude call)",
+        "Ticker with missing optional data gets data_quality PARTIAL and proceeds",
+        "Morning briefing generated when >= 2 signals succeed",
+        "CRITICAL alert created when < 2 signals succeed",
+        "All Signal rows have valid confidence (0-100), direction, entry_price, stop_loss, target",
+        "Briefing row has headline, summary, top_3, avoid_list",
+        "Mock test: Finnhub 429 on ticker 3 of 5 -> tickers 1,2,4,5 produce signals"
+      ],
+      "wave": 3,
+      "wave_name": "AI Core",
+      "status": "pending"
+    },
+    {
+      "id": 9,
+      "title": "REST API — all endpoints",
+      "description": "Implement the complete REST API with Pydantic response models and dependency injection.\n\napp/api/v1/deps.py: Dependency providers for db session, game engine, risk engine, service container. All use FastAPI Depends() pulling from request.app.state.container.\n\nJSON API Endpoints (app/api/v1/router.py):\n\n**Portfolio:**\n- GET /v1/portfolio -> portfolio summary (cash, equity, margin_used, margin_available, unrealized_pnl, day_pnl, milestone_current, milestone_next, milestone_pct)\n- GET /v1/portfolio/history -> daily equity snapshots for chart\n\n**Positions:**\n- GET /v1/positions -> all open positions with unrealized P&L\n- GET /v1/positions/{id} -> single position detail\n- POST /v1/positions -> open new short (ticker, shares; runs through RiskEngine)\n- POST /v1/positions/{id}/close -> close position at current price\n\n**Signals:**\n- GET /v1/signals -> today's signals ranked by confidence\n- GET /v1/signals/{id} -> single signal with full reasoning\n- GET /v1/signals/history -> historical signals with outcome tracking\n\n**Briefing:**\n- GET /v1/briefing -> latest morning briefing\n- GET /v1/briefing/history -> past briefings\n\n**Alerts:**\n- GET /v1/alerts?unacknowledged=true -> unacknowledged alerts\n- DELETE /v1/alerts/{id}/acknowledge -> acknowledge alert\n\n**Trades:**\n- GET /v1/trades -> trade history (closed positions)\n- GET /v1/trades/stats -> win rate, avg P&L, Sharpe, prediction accuracy\n\n**Watchlist:**\n- GET /v1/watchlist -> all watched tickers with thesis and SI data\n\n**Preflight:**\n- GET /v1/positions/preflight?ticker=X&shares=N -> RiskEngine check result without executing. Returns {approved: bool, reason: str, margin_required: Decimal, squeeze_level: str}. Used by Alpine.js trade form to show verdict in confirmation modal before submission.\n\nHTMX Partial Endpoints (app/api/v1/partials.py — separate router, response_class=HTMLResponse):\n- GET /v1/partials/positions -> HTML fragment of open positions table rows\n- GET /v1/partials/alerts -> HTML fragment of unacknowledged alert toasts\n- GET /v1/partials/pnl-badge -> HTML fragment of daily P&L badge\n- GET /v1/partials/signals-preview -> HTML fragment of today's signal bullets\nThese return rendered Jinja2 template fragments (app/templates/partials/), NOT JSON. Used by hx-get polling and SSE swap targets.\n\nAll JSON responses use envelope: {\"data\": ..., \"meta\": {\"timestamp\": ..., \"market_open\": bool}}\nAll errors: {\"data\": null, \"meta\": {...}, \"errors\": [{\"code\": ..., \"message\": ...}]}\nPydantic response_model on every endpoint.\nRaise HTTPException for 400/404/422.",
+      "priority": 9,
+      "phase": "playable",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        4,
+        8
+      ],
+      "acceptance": [
+        "Swagger at /docs shows all endpoints with response schemas",
+        "GET /v1/portfolio returns portfolio with cash, equity, margin fields, highest_milestone_reached",
+        "POST /v1/positions with valid ticker+shares creates position and returns it",
+        "POST /v1/positions returns 400 when RiskEngine vetoes (insufficient margin, PDT, CRITICAL squeeze)",
+        "POST /v1/positions/{id}/close calculates correct P&L and updates portfolio cash",
+        "GET /v1/positions/preflight returns RiskEngine verdict without executing trade",
+        "GET /v1/signals returns signals sorted by confidence descending",
+        "GET /v1/alerts?unacknowledged=true returns only unacknowledged alerts",
+        "DELETE /v1/alerts/{id}/acknowledge marks alert as acknowledged",
+        "GET /v1/trades/stats returns win rate and average P&L",
+        "All JSON responses use {data, meta} envelope format",
+        "Error responses use {data: null, meta, errors} format",
+        "GET /v1/partials/positions returns HTML fragment (Content-Type: text/html)",
+        "GET /v1/partials/alerts returns HTML fragment with toast markup",
+        "GET /v1/partials/pnl-badge returns HTML fragment with green/red P&L pill",
+        "Partials router is separate from JSON API router",
+        "POST /v1/positions validates: shares > 0, ticker in watchlist, ticker is string matching ^[A-Z]{1,5}$"
+      ],
+      "wave": 4,
+      "wave_name": "API + UI",
+      "status": "pending"
+    },
+    {
+      "id": 10,
+      "title": "HTMX frontend — dashboard, briefing, trade, history",
+      "description": "Build the complete HTMX + Alpine.js + Bootstrap 5 frontend.\n\napp/templates/base.html:\n- Bootstrap 5 CDN + Alpine.js CDN + HTMX CDN\n- Nav bar: 'SHORT GAME' title, equity display, milestone progress bar (thin bar below nav), daily P&L badge (green/red pill)\n- Alert toast container (top-right, max 3 visible)\n- Main content block\n\napp/templates/dashboard.html (above the fold at 1440px):\n- 3-stat row: Cash, Margin Used (%), Day P&L (+/-)\n- Open positions table: TICK, ENTRY, CURRENT, P&L, RISK (squeeze level badge), DAYS\n- Risk Radar panel (right side): squeeze level per watchlist ticker with color-coded badges\n- Today's signals preview: bullet (filled if confidence >= 55, hollow if < 55), ticker, confidence, 1-line summary\n- Claude prediction accuracy: 'Claude: 7/12 correct (58%)'\n- Win streak counter: 'Streak: N trades' with fire glow at 5+\n- HTMX polling: hx-trigger='every 30s' on positions table and P&L badge, pointing to /v1/partials/* endpoints\n\nEmpty states (shown when no data exists):\n- No open positions: 'No open positions. Review today's signals to find opportunities.'\n- No signals today: 'Daily scan hasn't run yet. Signals arrive after 4am ET.'\n- No trades: 'No trade history yet. Your first trade will appear here.'\n- No briefing: 'Morning briefing not yet available.'\n- No alerts: (nothing rendered — empty toast container)\n\napp/templates/briefing.html:\n- Headline (generated by Claude)\n- Summary paragraph (max 120 words)\n- Top 3 opportunities: cards with ticker, confidence, setup description, key risk, [Review Signal] and [Open Short] buttons\n- Avoid list: tickers below 55 confidence or HIGH+ squeeze\n- Market context: 1-sentence macro view\n\napp/templates/trade.html:\n- Pre-filled with ticker from query param (?ticker=DUOL)\n- Position sizing calculator: default 5% of equity, Kelly suggestion (after 20 trades)\n- Shares input auto-calculated from $ amount\n- Margin required display: entry_price * shares * 1.5\n- Pre-flight check: on 'Review Order' click, calls GET /v1/positions/preflight?ticker=X&shares=N to get RiskEngine verdict BEFORE showing modal\n- Confirmation modal (Alpine.js): 'Short N shares of TICKER at ~$X.XX / Margin required: $X / Stop: $X | Target: $X / Risk engine: APPROVED or VETOED: {reason}'\n- hx-post to /v1/positions\n- 3 clicks from signal to execution: (1) click signal card [Review Signal], (2) click [Review Order] on trade form, (3) click [Confirm Short] in modal\n\napp/templates/history.html:\n- Trade log table: ticker, entry, exit, P&L, duration, fees, grade (A-F)\n- Trade grade: A >= 80% captured, B 60-79%, C 40-59%, D 20-39%, F < 20% or loss\n- Cumulative P&L line chart (Chart.js)\n\napp/templates/profile.html:\n- Badge grid: 5 badges (First Blood, Thesis Correct, Risk Disciplined, Streak Master, Paper Millionaire)\n- Earned badges colored, unearned greyed with progress text\n\napp/templates/partials/alert_toast.html:\n- HTMX auto-dismiss: INFO after 8s, WARNING after 15s, CRITICAL persists until click\n- hx-trigger='load delay:Ns' with hx-delete for auto-dismiss\n- Stack max 3 visible, priority-based replacement\n\napp/static/css/style.css:\n- Bootstrap overrides, confidence badge colors, streak fire glow animation\n- Milestone progress bar styling with color transitions (grey -> blue -> green)\n- Toast styling by priority (red/yellow/blue)\n- CSS-only confetti animation for milestone celebrations (2 seconds)\n\napp/static/js/app.js:\n- Alpine.js components for confirmation modal, position calculator\n- HTMX polling for alerts (every 30s from /v1/alerts?unacknowledged=true)",
+      "priority": 10,
+      "phase": "playable",
+      "passes": false,
+      "verification": "visual",
+      "dependencies": [
+        9
+      ],
+      "acceptance": [
+        "Dashboard shows 3-stat row + open positions + risk radar + signals above fold at 1440px",
+        "Signal cards show confidence as integer with filled/hollow bullet",
+        "Risk Radar shows squeeze level per ticker with color badges",
+        "Milestone progress bar renders in nav with percentage to next milestone",
+        "Daily P&L badge shows green for positive, red for negative",
+        "Briefing page renders headline, summary, top 3, avoid list, market context",
+        "Trade page pre-fills ticker from query param",
+        "Confirmation modal shows margin calculation and risk engine verdict",
+        "Trade execution completes in 3 clicks from signal card",
+        "History page shows trade log with A-F grades",
+        "Alert toasts stack top-right, max 3, CRITICAL persists, WARNING 15s, INFO 8s",
+        "Win streak counter displays with fire glow at 5+",
+        "Prediction accuracy shows 'Claude: X/Y correct (Z%)'",
+        "Badge grid on profile page shows earned/unearned state",
+        "Empty states render for: no positions, no signals, no trades, no briefing",
+        "HTMX polling targets /v1/partials/* endpoints (not JSON API)",
+        "Pre-flight check fires before confirmation modal opens"
+      ],
+      "wave": 4,
+      "wave_name": "API + UI",
+      "status": "pending"
+    },
+    {
+      "id": 11,
+      "title": "Intraday refresh pipeline",
+      "description": "Build the lightweight intraday price refresh that runs every 30 minutes during market hours.\n\napp/services/scan/intraday_refresh.py:\n\nRuns every 30 min, 09:30-16:00 ET on market days only (use exchange_calendars to check).\n\nPer ticker in watchlist:\n1. Fetch /quote (5 Finnhub calls total)\n2. Update current_price on open positions for that ticker\n3. Compute unrealized P&L\n4. Check stop-loss crossing (price >= stop_loss for shorts -> CRITICAL EXIT SIGNAL alert)\n5. Check take-profit crossing (price <= take_profit for shorts -> WARNING TARGET HIT alert)\n6. Check margin ratio (< 1.30 -> CRITICAL MARGIN WARNING alert, < 1.40 -> WARNING alert)\n7. Check for > 2% price move since last signal -> WARNING LARGE MOVE alert\n\nZERO Claude calls during intraday. Quote-only. 5-10 Finnhub calls per cycle.\n\nAlert messages:\n- 'EXIT SIGNAL: {ticker} hit stop-loss at ${price} (stop: ${stop_loss})'\n- 'TARGET HIT: {ticker} reached ${price} (target: ${take_profit}). Consider closing.'\n- 'MARGIN WARNING: {ticker} margin ratio {ratio}% below 130% maintenance'\n- 'LARGE MOVE: {ticker} moved {pct}% since signal'",
+      "priority": 11,
+      "phase": "realtime",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        3,
+        4,
+        9
+      ],
+      "acceptance": [
+        "Intraday refresh updates current_price on open positions",
+        "Stop-loss crossing generates CRITICAL alert",
+        "Take-profit crossing generates WARNING alert",
+        "Margin ratio < 130% generates CRITICAL alert",
+        "Margin ratio < 140% generates WARNING alert",
+        "> 2% price move generates WARNING alert",
+        "No Claude API calls during intraday refresh",
+        "Only runs during market hours on market days (exchange_calendars check)",
+        "Total Finnhub calls per cycle: exactly 5 (one quote per ticker)"
+      ],
+      "wave": 5,
+      "wave_name": "Live Ops",
+      "status": "pending"
+    },
+    {
+      "id": 12,
+      "title": "APScheduler integration",
+      "description": "Configure APScheduler with all scheduled jobs, integrated into FastAPI lifespan via ServiceContainer.\n\napp/scheduler.py:\n\nReceives ServiceContainer as argument. Job functions access DB session and services through the container.\n\n4 scheduled jobs with cron triggers:\n1. daily_scan: 04:00 ET daily, misfire_grace_time=3600 (1h), coalesce=True. Runs on non-market days too — news still matters. If app was down at 04:00 and starts at 04:45, scan runs immediately. If starts at 05:30, skipped.\n2. morning_briefing_alert: 06:30 ET daily, misfire_grace_time=1800 (30m), coalesce=True\n3. intraday_refresh: every 30 min 09:30-16:00 ET, misfire_grace_time=300 (5m), coalesce=True, market days only\n4. mark_to_market: every 5 min 09:30-16:00 ET, misfire_grace_time=300 (5m), coalesce=True, market days only\n\n```python\nfrom zoneinfo import ZoneInfo\nET = ZoneInfo('US/Eastern')\n\nscheduler.add_job(daily_scan, CronTrigger(hour=4, timezone=ET),\n                  misfire_grace_time=3600, coalesce=True, id='daily_scan')\nscheduler.add_job(intraday_refresh, CronTrigger(minute='*/30', hour='9-15', timezone=ET),\n                  misfire_grace_time=300, coalesce=True, id='intraday_refresh')\n```\n\napp/main.py lifespan integration: ServiceContainer creates scheduler, stores on container.scheduler. Scheduler starts on app startup, shuts down gracefully on shutdown (wait=False for fast shutdown).\n\nexchange_calendars integration: intraday_refresh and mark_to_market skip NYSE holidays. Daily scan runs on all days. Mark-to-market exits early on half-days.\n\nRestart behavior: APScheduler is in-memory (no job store persistence). On SIGTERM, running mark-to-market transaction rolls back (SQLAlchemy handles this). Daily scan persists each ticker independently — if killed mid-scan after 3/5 tickers, those 3 signals are committed. No replay of missed tickers.\n\nTimezone handling: all cron triggers use US/Eastern timezone. Server runs UTC (Railway default).",
+      "priority": 12,
+      "phase": "realtime",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        8,
+        11
+      ],
+      "acceptance": [
+        "Scheduler starts with FastAPI app and shuts down gracefully (wait=False)",
+        "daily_scan job configured for 04:00 ET with misfire_grace_time=3600, coalesce=True",
+        "intraday_refresh configured for every 30 min during 09:30-16:00 ET with misfire_grace_time=300",
+        "mark_to_market configured for every 5 min during 09:30-16:00 ET with misfire_grace_time=300",
+        "Jobs skip NYSE holidays (test with mocked 2026-01-01, 2026-07-03)",
+        "All cron triggers use US/Eastern timezone (ZoneInfo)",
+        "Scheduler logging shows job registration on startup",
+        "Job functions receive ServiceContainer and access DB session through it",
+        "Test verifies job registration metadata (id, trigger timezone, misfire_grace_time)"
+      ],
+      "wave": 5,
+      "wave_name": "Live Ops",
+      "status": "pending"
+    },
+    {
+      "id": 13,
+      "title": "SSE streaming for live updates",
+      "description": "Add Server-Sent Events for real-time price and alert streaming. Simplified for single-player — no pub/sub, single queue.\n\napp/api/v1/stream.py:\n\nSingle-player SSE channel (one subscriber max):\n```python\nclass SSEChannel:\n    def __init__(self):\n        self._queue: asyncio.Queue | None = None\n\n    async def connect(self) -> AsyncGenerator[str, None]:\n        self._queue = asyncio.Queue()\n        try:\n            while True:\n                data = await self._queue.get()\n                yield f'event: {data[\"event\"]}\\ndata: {json.dumps(data[\"payload\"])}\\n\\n'\n        finally:\n            self._queue = None\n\n    async def push(self, event: str, payload: dict):\n        if self._queue:\n            await self._queue.put({'event': event, 'payload': payload})\n```\n\nTwo SSE endpoints:\n1. GET /v1/stream/prices — emits price updates for open positions every 5 seconds during market hours. Event: 'positions'. Payload: rendered HTML fragment.\n2. GET /v1/stream/alerts — pushes new alerts as created. Event: 'alert'. Payload: rendered HTML toast fragment.\n\nHTMX integration on dashboard:\n```html\n<div id='positions-table'\n     hx-ext='sse'\n     sse-connect='/v1/stream/prices'\n     sse-swap='positions'\n     hx-get='/v1/partials/positions'\n     hx-trigger='every 30s'>\n```\nWhen SSE connected, sse-swap handles updates. When SSE drops, hx-trigger fires as fallback. No code change needed — HTMX handles both.",
+      "priority": 13,
+      "phase": "realtime",
+      "passes": false,
+      "verification": "visual",
+      "dependencies": [
+        10,
+        12
+      ],
+      "acceptance": [
+        "GET /v1/stream/prices returns text/event-stream content type",
+        "Price updates emit every 5 seconds during market hours",
+        "GET /v1/stream/alerts pushes new alerts in real-time",
+        "Dashboard position P&L updates without page refresh when SSE connected",
+        "New alerts appear as toasts via SSE",
+        "Dashboard gracefully falls back to polling if SSE disconnects",
+        "curl -N /v1/stream/alerts receives events"
+      ],
+      "wave": 5,
+      "wave_name": "Live Ops",
+      "status": "pending"
+    },
+    {
+      "id": 14,
+      "title": "Alert system with priority-based toasts",
+      "description": "Build the complete alert service with severity classification and HTMX toast rendering.\n\napp/domain/alerts/service.py:\n\nAlert types: BRIEFING_READY, ENTRY_SIGNAL, EXIT_SIGNAL, MARGIN_WARNING, SQUEEZE_ESCALATION, MILESTONE_REACHED, FORCED_LIQUIDATION.\n\nPriority classification:\n- CRITICAL (P0): Stop-loss hit, margin call, scan degraded, forced liquidation — persist until acknowledged, red\n- WARNING (P1): Target hit, large move, squeeze escalation — auto-dismiss 15s, yellow\n- INFO (P2): Briefing ready, trade confirmed, signal update — auto-dismiss 8s, blue\n\nAlert creation method creates DB row + triggers SSE push.\n\nStack behavior:\n- Max 3 visible toasts simultaneously\n- 4th alert: oldest non-CRITICAL removed. If all 3 CRITICAL, 4th queues below.\n- HTMX polls /v1/alerts?unacknowledged=true every 30s as fallback\n\nMorning briefing alert at 06:30 ET after daily scan.\nMargin warning at ratio < 140% (early warning before 130% call).\nSqueeze escalation when level changes (e.g., LOW -> MEDIUM).\nMilestone alert when equity crosses threshold.",
+      "priority": 14,
+      "phase": "realtime",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        9,
+        11
+      ],
+      "acceptance": [
+        "Alert creation persists to database with correct priority",
+        "CRITICAL alerts are not auto-dismissed (acknowledged_at stays null until manual ack)",
+        "WARNING alerts have 15s auto-dismiss behavior in frontend",
+        "INFO alerts have 8s auto-dismiss behavior in frontend",
+        "Max 3 toasts visible — 4th replaces oldest non-CRITICAL",
+        "Margin warning alert fires at ratio < 140%",
+        "Squeeze escalation alert fires when level changes",
+        "Milestone alert fires when equity crosses threshold",
+        "DELETE /v1/alerts/{id}/acknowledge sets acknowledged=true and acknowledged_at"
+      ],
+      "wave": 5,
+      "wave_name": "Live Ops",
+      "status": "pending"
+    },
+    {
+      "id": 15,
+      "title": "Milestone tracking with celebrations",
+      "description": "Implement milestone detection during mark-to-market with one-way progression and UI celebrations.\n\nMilestones: $100k, $150k, $250k, $500k, $1M.\n\nCheck equity against milestones during every mark_to_market cycle. Equity = cash + sum(unrealized P&L on open positions).\n\nMilestones are one-way — no downgrade alert if equity drops below after crossing. Store highest_milestone_reached in Portfolio.\n\nWhen milestone is newly reached:\n- Create MILESTONE_REACHED alert (INFO priority)\n- Dashboard banner with milestone celebration\n- CSS-only confetti animation (2 seconds)\n\nMilestone progress bar in nav: thin bar showing percentage to next milestone. Color transitions: grey (distant) -> blue (>50%) -> green (>90%).",
+      "priority": 15,
+      "phase": "realtime",
+      "passes": false,
+      "verification": "visual",
+      "dependencies": [
+        14
+      ],
+      "acceptance": [
+        "Equity crossing $100k triggers MILESTONE_REACHED alert",
+        "Milestone is one-way — dropping below $100k does not create downgrade alert",
+        "Progress bar shows correct percentage to next milestone",
+        "Progress bar color transitions: grey -> blue (>50%) -> green (>90%)",
+        "Confetti animation plays for 2 seconds on milestone",
+        "Milestone tracked in Portfolio.highest_milestone_reached"
+      ],
+      "wave": 6,
+      "wave_name": "Polish",
+      "status": "pending"
+    },
+    {
+      "id": 16,
+      "title": "Prediction outcome tracking and learning loop",
+      "description": "Link closed trades to originating predictions and track prediction accuracy per engine.\n\napp/domain/prediction/tracker.py:\n- When a trade closes, find the Signal that originated it (by ticker + date proximity)\n- Update linked Prediction: outcome_pnl, outcome_correct\n- outcome_correct = True if direction was 'short' AND stock price decreased within time_horizon_days\n\nPer-engine accuracy tracking:\n- Track accuracy separately for each engine_source ('claude', 'quant', 'ensemble')\n- Dashboard shows: 'Claude: 7/12 (58%) | Quant: 5/12 (42%) | Ensemble: 8/12 (67%)'\n- Engine accuracy informs ensemble weighting over time (advisory, not automatic in Round 1)\n\nPrediction accuracy display:\n- Format: 'Ensemble: 8/12 correct (67%)' as primary, with per-engine breakdown below\n- Shown on dashboard below signals section\n- Updated after each trade closes or after time_horizon_days expires for un-traded signals\n\nData collection:\n- When Prediction table has 50+ rows with non-null outcome_correct, log 'Ensemble learning data threshold reached'\n- Per-engine accuracy stats available via /v1/trades/stats",
+      "priority": 16,
+      "phase": "polish",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        8,
+        9
+      ],
+      "acceptance": [
+        "Closing a trade updates the linked Prediction's outcome_pnl and outcome_correct",
+        "Prediction accuracy tracked per engine_source ('claude', 'quant', 'ensemble')",
+        "Accuracy display shows per-engine breakdown",
+        "Un-traded signals auto-evaluate after time_horizon_days expires",
+        "Log message fires when 50+ predictions have outcomes",
+        "/v1/trades/stats includes per-engine accuracy"
+      ],
+      "wave": 6,
+      "wave_name": "Polish",
+      "status": "pending"
+    },
+    {
+      "id": 17,
+      "title": "Trade statistics endpoint and dashboard card",
+      "description": "Build comprehensive trade analytics.\n\nGET /v1/trades/stats returns:\n- total_trades: int\n- win_rate: float (0-1)\n- avg_pnl: Decimal\n- total_pnl: Decimal\n- best_trade: {ticker, pnl, date}\n- worst_trade: {ticker, pnl, date}\n- avg_hold_duration_days: float\n- sharpe_ratio: float (annualized, risk-free rate = 0)\n- prediction_accuracy: float (correct/total if 10+ evaluated)\n- current_streak: int\n- best_streak: int\n\nDashboard stats card showing key metrics below the positions table.",
+      "priority": 17,
+      "phase": "polish",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        9,
+        16
+      ],
+      "acceptance": [
+        "GET /v1/trades/stats returns all listed fields",
+        "Win rate is correctly calculated from closed trades",
+        "Average P&L is correctly calculated",
+        "Sharpe ratio uses annualized daily returns",
+        "Current streak counts consecutive profitable trades from most recent",
+        "Best streak is the longest consecutive profitable run ever",
+        "Stats endpoint returns valid data with 0 trades (all zeros/nulls)"
+      ],
+      "wave": 6,
+      "wave_name": "Polish",
+      "status": "pending"
+    },
+    {
+      "id": 18,
+      "title": "Cloudflare Access + Railway deployment",
+      "description": "Deploy to production at downf411.com.\n\nrailway.json (NOT Procfile — Railway uses this for deploy hooks):\n```json\n{\n    \"deploy\": {\n        \"startCommand\": \"alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT\"\n    }\n}\n```\nAlembic runs synchronously before uvicorn starts. If migration fails, deploy fails. No race condition with APScheduler.\n\nDatabase connection pool config in app/db/session.py:\n```python\nengine = create_async_engine(\n    settings.DATABASE_URL,\n    pool_pre_ping=True,     # Verify connection before use\n    pool_recycle=300,        # Recycle connections every 5 min\n    pool_size=5,\n    max_overflow=2,\n)\n```\n\nSecurity headers middleware (FastAPI middleware or Cloudflare transform rules):\n- X-Content-Type-Options: nosniff\n- X-Frame-Options: DENY\n- Strict-Transport-Security: max-age=31536000; includeSubDomains\n- Referrer-Policy: strict-origin-when-cross-origin\n\nRailway:\n- Link GitHub repo\n- Set environment variables: DATABASE_URL, ANTHROPIC_API_KEY, FINNHUB_API_KEY, LOG_LEVEL, PORT\n- Deploy via git push\n\nCloudflare:\n- DNS: CNAME downf411.com -> Railway domain\n- Cloudflare Access: application policy restricting to Blake's email\n- SSL: Full (Strict)\n\nNo application-level auth code — Cloudflare Access handles everything.",
+      "priority": 18,
+      "phase": "polish",
+      "passes": false,
+      "verification": "visual",
+      "dependencies": [
+        10,
+        12,
+        13,
+        14
+      ],
+      "acceptance": [
+        "https://downf411.com loads the dashboard",
+        "Unauthenticated requests redirect to Cloudflare Access login",
+        "Blake's email grants access through Cloudflare Access",
+        "SSL is Full (Strict) on Cloudflare",
+        "All scheduler jobs fire correctly in production",
+        "Database migrations applied on Railway PostgreSQL via railway.json startCommand",
+        "railway.json exists with alembic upgrade head && uvicorn command",
+        "Security headers present: X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy",
+        "Database pool_pre_ping=True, pool_recycle=300, pool_size=5, max_overflow=2"
+      ],
+      "wave": 7,
+      "wave_name": "Ship",
+      "status": "pending"
+    },
+    {
+      "id": 19,
+      "title": "Quality hardening and test coverage",
+      "description": "Final quality pass across the entire codebase with comprehensive test infrastructure.\n\ntests/conftest.py structure:\n```python\nimport pytest\nfrom sqlalchemy.ext.asyncio import create_async_engine, AsyncSession\nfrom app.db.models import Base\n\n# Use SQLite for tests (fast, no external dependency)\nTEST_DB_URL = 'sqlite+aiosqlite:///test.db'\n\n@pytest.fixture(scope='session')\ndef event_loop():\n    loop = asyncio.new_event_loop()\n    yield loop\n    loop.close()\n\n@pytest.fixture(scope='session')\nasync def engine():\n    engine = create_async_engine(TEST_DB_URL)\n    async with engine.begin() as conn:\n        await conn.run_sync(Base.metadata.create_all)\n    yield engine\n    async with engine.begin() as conn:\n        await conn.run_sync(Base.metadata.drop_all)\n\n@pytest.fixture\nasync def session(engine):\n    async with AsyncSession(engine) as session:\n        async with session.begin():\n            yield session\n        await session.rollback()\n\n@pytest.fixture\ndef portfolio_factory(session):\n    async def _make(cash=Decimal('10000.0000'), **kwargs):\n        p = Portfolio(cash=cash, **kwargs)\n        session.add(p)\n        await session.flush()\n        return p\n    return _make\n\n@pytest.fixture\ndef position_factory(session, portfolio_factory):\n    async def _make(ticker='DUOL', shares=100, entry_price=Decimal('48.5000'),\n                    status='OPEN', portfolio=None, **kwargs):\n        if portfolio is None:\n            portfolio = await portfolio_factory()\n        p = Position(portfolio_id=portfolio.id, ticker=ticker, shares=shares,\n                     entry_price=entry_price, current_price=entry_price,\n                     status=status, stop_loss=entry_price * Decimal('1.08'),\n                     take_profit=entry_price * Decimal('0.85'),\n                     borrow_rate=Decimal('0.035'), margin_deposited=entry_price * shares * Decimal('1.5'),\n                     accrued_borrow_fees=Decimal('0'), **kwargs)\n        session.add(p)\n        await session.flush()\n        return p\n    return _make\n\n@pytest.fixture\ndef quote_factory():\n    def _make(price=Decimal('48.5000'), **kwargs):\n        return Quote(price=price, change_pct=0.0, volume=1000000, timestamp=datetime.now(UTC))\n    return _make\n```\n\nClaude mock fixture (tests/conftest.py):\n```python\n@pytest.fixture\ndef mock_claude(monkeypatch):\n    responses = []\n    async def fake_create(**kwargs):\n        return responses.pop(0)\n    monkeypatch.setattr('anthropic.AsyncAnthropic.messages.create', fake_create)\n    def set_response(json_str):\n        responses.append(MockMessage(content=[MockToolUse(input=json.loads(json_str))]))\n    return set_response\n```\n\nFinnhub mock fixture:\n```python\n@pytest.fixture\ndef mock_finnhub():\n    adapter = FinnhubAdapter.__new__(FinnhubAdapter)\n    adapter._quotes = {}\n    def set_quote(ticker, price):\n        adapter._quotes[ticker] = Quote(price=price, ...)\n    adapter.set_quote = set_quote\n    return adapter\n```\n\nJSON fixtures in tests/fixtures/:\n- valid_signal.json — well-formed ClaudeSignalResponse\n- malformed_signal.json — invalid JSON (missing required fields)\n- wrong_schema_version.json — schema_version='v2'\n\nReview and verify:\n- Test coverage: 80%+ on new code (python -m pytest -v --cov=app)\n- Every domain function has at least one test\n- All Decimal arithmetic paths verified — zero float() calls in monetary code\n- All Pydantic response models have complete field coverage\n- All API errors return structured {data: null, meta, errors} responses\n- Request validation rejects negative shares, unknown tickers, invalid amounts\n- No Pydantic validation errors on any API response\n\nRequired tests:\n- Squeeze boundary tests at every numeric cutoff\n- Full trade lifecycle integration test: view signal -> open short -> mark-to-market -> close -> verify P&L\n- Claude tool_use response parsing with valid fixtures\n- Finnhub client with mocked failures, retries, and cache fallback\n- APScheduler job registration metadata (id, trigger timezone, misfire_grace_time)\n- Mark-to-market 5-phase ordering (borrow fees before margin check, stop-loss before margin)\n- Forced liquidation PDT exemption",
+      "priority": 19,
+      "phase": "polish",
+      "passes": false,
+      "verification": "automated",
+      "dependencies": [
+        16,
+        17
+      ],
+      "acceptance": [
+        "python -m pytest -v --cov=app shows 80%+ coverage on new code",
+        "Zero float() calls in any monetary code path (grep verification)",
+        "All API endpoints return structured error responses on invalid input",
+        "Negative shares rejected with 400 error",
+        "Unknown ticker rejected with 400 error",
+        "Full trade lifecycle integration test passes end-to-end",
+        "Squeeze boundary tests cover every threshold cutoff",
+        "Claude tool_use response parsing handles valid fixtures",
+        "tests/conftest.py has portfolio_factory, position_factory, quote_factory, mock_claude, mock_finnhub",
+        "tests/fixtures/ has valid_signal.json, malformed_signal.json, wrong_schema_version.json",
+        "Tests use SQLite (aiosqlite), not PostgreSQL",
+        "Mark-to-market phase ordering verified: borrow fee before margin check triggers margin call",
+        "Forced liquidation PDT exemption test passes",
+        "APScheduler job registration test verifies misfire_grace_time and timezone"
+      ],
+      "wave": 7,
+      "wave_name": "Ship",
+      "status": "pending"
+    }
+  ]
+}

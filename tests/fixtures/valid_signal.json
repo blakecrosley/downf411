@@ -1,0 +1,24 @@
+{
+  "schema_version": "v1",
+  "ticker": "DUOL",
+  "as_of": "2026-02-27",
+  "prediction": {
+    "direction": "SHORT",
+    "confidence": 72,
+    "entry_price": 48.50,
+    "stop_loss": 52.38,
+    "target": 41.22,
+    "time_horizon_days": 3,
+    "reasoning": [
+      "AI tutoring platforms gaining market share in language learning",
+      "RSI at 74 indicating overbought conditions"
+    ],
+    "catalyst": "Earnings report next week with elevated expectations"
+  },
+  "risk_assessment": {
+    "squeeze_probability": "LOW",
+    "borrow_availability": "EASY",
+    "volatility": "MEDIUM",
+    "warnings": []
+  }
+}
