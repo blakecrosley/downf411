@@ -1,1 +1,54 @@
-"""Game configuration constants — populated in S05."""
+"""Game configuration constants."""
+
+from decimal import Decimal
+
+# === Scheduling ===
+DAILY_SCAN_HOUR_ET = 4
+INTRADAY_REFRESH_MINUTES = 30
+
+# === Claude AI ===
+CLAUDE_MODEL = "claude-opus-4-6"
+CLAUDE_TEMPERATURE = 0.2
+CLAUDE_ENSEMBLE_TEMPERATURE = 0.3
+CLAUDE_MAX_TOKENS_SIGNAL = 400
+CLAUDE_MAX_TOKENS_ENSEMBLE = 500
+CLAUDE_MAX_TOKENS_BRIEFING = 300
+
+# === Signal Thresholds ===
+MIN_ACTIONABLE_CONFIDENCE = 55
+HIGH_CONFIDENCE_THRESHOLD = 70
+
+# === Position Sizing ===
+DEFAULT_POSITION_PCT = Decimal("5.0")
+KELLY_MIN_TRADES = 20
+KELLY_MAX_PCT = Decimal("25.0")
+KELLY_MIN_PCT = Decimal("1.0")
+
+# === Margin ===
+INITIAL_MARGIN_PCT = Decimal("1.5")
+MAINTENANCE_MARGIN_PCT = Decimal("1.3")
+LIQUIDATION_MARGIN_PCT = Decimal("1.1")
+MARGIN_WARNING_PCT = Decimal("1.4")
+
+# === PDT ===
+PDT_THRESHOLD = Decimal("25000")
+PDT_MAX_DAY_TRADES = 3
+PDT_ROLLING_DAYS = 5
+
+# === Short Interest ===
+SI_STALE_THRESHOLD_DAYS = 14
+
+# === Finnhub ===
+FINNHUB_MAX_NEWS_ITEMS = 8
+FINNHUB_PRICE_HISTORY_DAYS = 20
+
+# === Alerts ===
+ALERT_MAX_VISIBLE = 3
+ALERT_DISMISS_WARNING = 15
+ALERT_DISMISS_INFO = 8
+
+# === Milestones ===
+MILESTONES = [100_000, 150_000, 250_000, 500_000, 1_000_000]
+
+# === Streaks ===
+STREAK_FIRE_THRESHOLD = 5
