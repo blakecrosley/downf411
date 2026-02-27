@@ -6,6 +6,7 @@ from anthropic import AsyncAnthropic
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import Settings
+from app.domain.market.finnhub_adapter import FinnhubAdapter
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -18,6 +19,5 @@ class ServiceContainer:
         self.settings = settings
         self.session_factory = session_factory
         self.anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        # FinnhubAdapter initialized lazily after domain module is available
-        self.finnhub: object | None = None
+        self.finnhub = FinnhubAdapter(api_key=settings.FINNHUB_API_KEY)
         self.scheduler: AsyncIOScheduler | None = None
