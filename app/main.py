@@ -1,7 +1,9 @@
 import logging
+import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -23,12 +25,32 @@ async def lifespan(app: FastAPI):
         logger.info("Scheduler shut down")
 
 
+security = HTTPBasic()
+
+
+def verify_password(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """Gate all routes behind a password. Username is ignored."""
+    if not settings.APP_PASSWORD:
+        return "open"
+    correct = secrets.compare_digest(credentials.password.encode(), settings.APP_PASSWORD.encode())
+    if not correct:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
 def create_app(app_settings: Settings | None = None) -> FastAPI:
+    deps = [Depends(verify_password)] if settings.APP_PASSWORD else []
+
     app = FastAPI(
         title="Short Game",
         description="AI-powered paper trading simulator focused on short selling",
         version="1.2.0",
         lifespan=lifespan,
+        dependencies=deps,
     )
 
     from app.api.v1.router import router as api_router
