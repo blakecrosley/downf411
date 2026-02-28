@@ -46,6 +46,9 @@
             </div>
             <div class="card-body p-0">
                 <div id="positions-table"
+                     hx-ext="sse"
+                     sse-connect="/v1/stream/prices"
+                     sse-swap="positions"
                      hx-get="/v1/partials/positions"
                      hx-trigger="load, every 30s"
                      hx-swap="innerHTML"
