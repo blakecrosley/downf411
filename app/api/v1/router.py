@@ -430,6 +430,25 @@ async def get_trade_stats(session: AsyncSession = Depends(get_session)):
             durations.append((t.closed_at - t.opened_at).total_seconds() / 86400)
     avg_duration = sum(durations) / len(durations) if durations else 0.0
 
+    # Sharpe ratio (annualized, risk-free rate = 0)
+    sharpe = 0.0
+    if len(closed) >= 2:
+        import numpy as np
+        returns = [float(t.net_pnl or 0) for t in closed]
+        mean_r = np.mean(returns)
+        std_r = np.std(returns, ddof=1)
+        if std_r > 0:
+            # Annualize assuming ~252 trading days
+            sharpe = float(mean_r / std_r * np.sqrt(252))
+
+    # Prediction accuracy (from tracker)
+    from app.domain.prediction.tracker import get_engine_accuracy
+    engine_acc = await get_engine_accuracy(session)
+
+    # Overall prediction accuracy
+    ens = engine_acc.get("ensemble", {"correct": 0, "total": 0, "pct": 0})
+    pred_accuracy = ens["pct"] / 100 if ens["total"] >= 10 else None
+
     data = TradeStatsResponse(
         total_trades=len(closed),
         win_rate=len(wins) / len(closed),
@@ -438,10 +457,11 @@ async def get_trade_stats(session: AsyncSession = Depends(get_session)):
         best_trade={"ticker": best.ticker, "pnl": str(best.net_pnl), "date": best.closed_at.isoformat() if best.closed_at else ""},
         worst_trade={"ticker": worst.ticker, "pnl": str(worst.net_pnl), "date": worst.closed_at.isoformat() if worst.closed_at else ""},
         avg_hold_duration_days=avg_duration,
-        sharpe_ratio=0.0,
-        prediction_accuracy=None,
+        sharpe_ratio=sharpe,
+        prediction_accuracy=pred_accuracy,
         current_streak=current_streak,
         best_streak=best_streak,
+        engine_accuracy=engine_acc,
     )
     return _envelope(data.model_dump())
 
