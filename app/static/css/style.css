@@ -1,0 +1,165 @@
+/* Short Game — Bootstrap 5 dark overrides */
+
+:root {
+    --sg-green: #198754;
+    --sg-red: #dc3545;
+    --sg-gold: #ffc107;
+}
+
+body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+/* Nav */
+.navbar-brand {
+    letter-spacing: 2px;
+    font-size: 1.1rem;
+}
+
+.nav-equity {
+    font-size: 1rem;
+}
+
+/* Milestone progress bar */
+.milestone-progress {
+    height: 4px;
+    border-radius: 0;
+    background: #2a2a4a;
+}
+
+.milestone-bar {
+    margin: 0;
+}
+
+/* Stat cards */
+.stat-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #999;
+}
+
+.stat-value {
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+/* P&L badges */
+.badge-pnl-positive {
+    background: var(--sg-green);
+    color: white;
+    font-size: 0.85rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+}
+
+.badge-pnl-negative {
+    background: var(--sg-red);
+    color: white;
+    font-size: 0.85rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+}
+
+/* Confidence bullets */
+.text-success { color: var(--sg-green) !important; }
+.text-danger { color: var(--sg-red) !important; }
+
+/* Streak fire glow */
+.streak-fire .streak-number {
+    font-size: 3rem;
+    font-weight: 900;
+    color: var(--sg-gold);
+    text-shadow: 0 0 20px rgba(255, 193, 7, 0.6), 0 0 40px rgba(255, 193, 7, 0.3);
+    animation: fireGlow 1.5s ease-in-out infinite alternate;
+}
+
+.streak-number {
+    font-size: 3rem;
+    font-weight: 900;
+}
+
+@keyframes fireGlow {
+    from { text-shadow: 0 0 10px rgba(255, 193, 7, 0.4), 0 0 20px rgba(255, 193, 7, 0.2); }
+    to { text-shadow: 0 0 25px rgba(255, 193, 7, 0.7), 0 0 50px rgba(255, 193, 7, 0.4); }
+}
+
+/* Toast overrides */
+.toast {
+    background: #2a2a4a;
+    color: #e0e0e0;
+}
+
+.toast-container {
+    z-index: 1080;
+}
+
+.toast.border-danger { border-width: 2px !important; }
+.toast.border-warning { border-width: 2px !important; }
+.toast.border-info { border-width: 2px !important; }
+
+/* Trade grade colors */
+.grade-a { color: var(--sg-green); font-weight: 700; }
+.grade-b { color: #20c997; }
+.grade-c { color: var(--sg-gold); }
+.grade-d { color: #fd7e14; }
+.grade-f { color: var(--sg-red); font-weight: 700; }
+
+/* Cards */
+.card {
+    border-radius: 8px;
+}
+
+/* Tables */
+.table-dark {
+    --bs-table-bg: transparent;
+}
+
+.table-dark th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #999;
+    border-bottom: 1px solid #333;
+}
+
+/* List group overrides */
+.list-group-item.bg-dark:hover {
+    background: #2a2a4a !important;
+}
+
+/* Badge grid */
+.card.opacity-25 {
+    filter: grayscale(100%);
+}
+
+/* HTMX loading indicator */
+.htmx-indicator {
+    display: none;
+}
+
+.htmx-request .htmx-indicator {
+    display: inline-block;
+}
+
+/* Confetti animation for milestones */
+@keyframes confetti {
+    0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+    100% { transform: translateY(-200px) rotate(720deg); opacity: 0; }
+}
+
+.confetti-particle {
+    position: fixed;
+    width: 10px;
+    height: 10px;
+    animation: confetti 2s ease-out forwards;
+    pointer-events: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .stat-value { font-size: 1.1rem; }
+    .streak-number { font-size: 2rem; }
+}

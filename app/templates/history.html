@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Trade History — Short Game{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+    <div class="col-lg-8">
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Trade Log</span>
+                <div id="trade-stats-badge"
+                     hx-get="/v1/partials/trade-stats-badge"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="trade-log"
+                     hx-get="/v1/partials/trade-log"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
+                    <div class="text-center text-muted py-4">Loading trades...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card bg-dark border-secondary">
+            <div class="card-header">Cumulative P&amp;L</div>
+            <div class="card-body">
+                <canvas id="pnlChart" height="200"></canvas>
+            </div>
+        </div>
+        <div class="card bg-dark border-secondary mt-3">
+            <div class="card-header">Stats</div>
+            <div class="card-body" id="trade-stats"
+                 hx-get="/v1/partials/trade-stats"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="text-muted">Loading...</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    fetch('/v1/trades')
+        .then(r => r.json())
+        .then(resp => {
+            const trades = resp.data || [];
+            if (!trades.length) return;
+
+            let cumulative = 0;
+            const labels = [];
+            const data = [];
+            trades.forEach((t, i) => {
+                cumulative += parseFloat(t.net_pnl || 0);
+                labels.push(t.ticker);
+                data.push(cumulative);
+            });
+
+            new Chart(document.getElementById('pnlChart'), {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Cumulative P&L',
+                        data: data,
+                        borderColor: cumulative >= 0 ? '#198754' : '#dc3545',
+                        backgroundColor: 'transparent',
+                        tension: 0.3,
+                        pointRadius: 3,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { grid: { color: '#333' } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        });
+});
+</script>
+{% endblock %}

@@ -55,9 +55,11 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
 
     from app.api.v1.router import router as api_router
     from app.api.v1.partials import router as partials_router
+    from app.api.v1.pages import router as pages_router
 
     app.include_router(api_router, prefix="/v1")
     app.include_router(partials_router, prefix="/v1/partials")
+    app.include_router(pages_router)
 
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
 

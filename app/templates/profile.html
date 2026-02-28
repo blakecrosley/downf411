@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Profile — Short Game{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <h4 class="mb-3">Achievements</h4>
+        <div id="badge-grid"
+             hx-get="/v1/partials/badge-grid"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="text-muted">Loading badges...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}

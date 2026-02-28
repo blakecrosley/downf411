@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Short Game{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+
+    <!-- Left column: Stats + Positions + Signals -->
+    <div class="col-lg-8">
+
+        <!-- 3-stat row -->
+        <div class="row g-3 mb-3" id="stat-cards"
+             hx-get="/v1/partials/stat-cards"
+             hx-trigger="load, every 30s"
+             hx-swap="innerHTML">
+            <div class="col-4">
+                <div class="card bg-dark border-secondary">
+                    <div class="card-body text-center">
+                        <div class="stat-label">Cash</div>
+                        <div class="stat-value">--</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="card bg-dark border-secondary">
+                    <div class="card-body text-center">
+                        <div class="stat-label">Margin Used</div>
+                        <div class="stat-value">--</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-4">
+                <div class="card bg-dark border-secondary">
+                    <div class="card-body text-center">
+                        <div class="stat-label">Day P&amp;L</div>
+                        <div class="stat-value">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Open positions -->
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Open Positions</span>
+                <span class="htmx-indicator spinner-border spinner-border-sm"></span>
+            </div>
+            <div class="card-body p-0">
+                <div id="positions-table"
+                     hx-get="/v1/partials/positions"
+                     hx-trigger="load, every 30s"
+                     hx-swap="innerHTML"
+                     hx-indicator=".htmx-indicator">
+                    <div class="text-center text-muted py-4">Loading positions...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Today's signals preview -->
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Today's Signals</span>
+                <a href="/briefing" class="btn btn-outline-light btn-sm">Full Briefing</a>
+            </div>
+            <div class="card-body" id="signals-preview"
+                 hx-get="/v1/partials/signals-preview"
+                 hx-trigger="load, every 60s"
+                 hx-swap="innerHTML">
+                <div class="text-muted">Loading signals...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right column: Risk Radar + Stats -->
+    <div class="col-lg-4">
+
+        <!-- Risk Radar -->
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header">Risk Radar</div>
+            <div class="card-body" id="risk-radar"
+                 hx-get="/v1/partials/risk-radar"
+                 hx-trigger="load, every 60s"
+                 hx-swap="innerHTML">
+                <div class="text-muted">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Prediction accuracy -->
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header">Prediction Accuracy</div>
+            <div class="card-body" id="prediction-accuracy"
+                 hx-get="/v1/partials/prediction-accuracy"
+                 hx-trigger="load, every 120s"
+                 hx-swap="innerHTML">
+                <div class="text-muted">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Win streak -->
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header">Streak</div>
+            <div class="card-body" id="win-streak"
+                 hx-get="/v1/partials/win-streak"
+                 hx-trigger="load, every 60s"
+                 hx-swap="innerHTML">
+                <div class="text-muted">--</div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
