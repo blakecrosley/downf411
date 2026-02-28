@@ -1,0 +1,8 @@
+{
+  "schema_version": "v1",
+  "ticker": "DUOL",
+  "prediction": {
+    "direction": "SHORT",
+    "confidence": 72
+  }
+}
