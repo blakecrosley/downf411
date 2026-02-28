@@ -22,6 +22,11 @@ async def briefing(request: Request):
     return templates.TemplateResponse("briefing.html", {"request": request})
 
 
+@router.get("/signal/{ticker}")
+async def signal_detail(request: Request, ticker: str):
+    return templates.TemplateResponse("signal.html", {"request": request, "ticker": ticker.upper()})
+
+
 @router.get("/trade")
 async def trade(request: Request):
     return templates.TemplateResponse("trade.html", {"request": request})

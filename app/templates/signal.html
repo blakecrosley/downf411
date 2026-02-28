@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} Signal — Short Game{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <a href="/briefing" class="text-muted small d-block mb-3">&larr; Back to Briefing</a>
+        <div id="signal-detail"
+             hx-get="/v1/partials/signal-detail?ticker={{ ticker }}"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="text-center text-muted py-5">Loading thesis for {{ ticker }}...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}

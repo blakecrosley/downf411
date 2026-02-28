@@ -256,7 +256,7 @@ async def signals_preview(session: AsyncSession = Depends(get_session)):
         bullet_cls = "text-success" if s.confidence >= 55 else "text-muted"
         reasoning = s.reasoning[0] if isinstance(s.reasoning, list) and s.reasoning else ""
         html += (
-            f'<a href="/trade?ticker={s.ticker}" class="list-group-item list-group-item-action bg-dark border-secondary">'
+            f'<a href="/signal/{s.ticker}" class="list-group-item list-group-item-action bg-dark border-secondary">'
             f'<div class="d-flex justify-content-between">'
             f'<span><span class="{bullet_cls}">{bullet}</span> <strong>{s.ticker}</strong>'
             f' <span class="badge bg-secondary">{s.direction}</span></span>'
@@ -426,18 +426,20 @@ async def briefing_full(session: AsyncSession = Depends(get_session)):
     for item in (briefing.top_3 or [])[:3]:
         ticker = item.get("ticker", "??")
         conf = item.get("confidence", 0)
-        setup = item.get("setup", "")
-        risk = item.get("risk", "")
+        catalyst = item.get("catalyst", "")
+        entry = item.get("entry", "")
+        target = item.get("target", "")
         top3_html += (
             f'<div class="col-md-4">'
             f'<div class="card bg-dark border-secondary h-100">'
             f'<div class="card-body">'
             f'<h6 class="card-title">{ticker} <span class="badge bg-primary">{conf}%</span></h6>'
-            f'<p class="card-text small">{setup}</p>'
-            f'<p class="card-text small text-warning">Risk: {risk}</p>'
+            f'<p class="card-text small">{catalyst}</p>'
+            f'<p class="card-text small text-muted">Entry ${entry} &rarr; Target ${target}</p>'
             f'</div>'
-            f'<div class="card-footer">'
-            f'<a href="/trade?ticker={ticker}" class="btn btn-warning btn-sm w-100">Open Short</a>'
+            f'<div class="card-footer d-flex gap-2">'
+            f'<a href="/signal/{ticker}" class="btn btn-outline-light btn-sm flex-grow-1">View Thesis</a>'
+            f'<a href="/trade?ticker={ticker}" class="btn btn-warning btn-sm flex-grow-1">Trade</a>'
             f'</div>'
             f'</div></div>'
         )
@@ -612,4 +614,194 @@ async def badge_grid(session: AsyncSession = Depends(get_session)):
             f'</div></div></div>'
         )
     html += '</div>'
+    return HTMLResponse(html)
+
+
+# === Signal detail ===
+
+@router.get("/signal-detail")
+async def signal_detail_partial(ticker: str, session: AsyncSession = Depends(get_session)):
+    from app.domain.game.rules.squeeze import classify_squeeze_risk
+
+    ticker = ticker.upper()
+
+    # Get watchlist thesis
+    wl = await session.scalar(select(Watchlist).where(Watchlist.ticker == ticker))
+
+    # Get most recent signal for this ticker
+    signal = await session.scalar(
+        select(Signal)
+        .where(Signal.ticker == ticker)
+        .order_by(desc(Signal.created_at))
+        .limit(1)
+    )
+
+    if not wl and not signal:
+        return HTMLResponse(
+            f'<div class="text-center text-muted py-5">'
+            f'<h5>No data found for {ticker}</h5>'
+            f'<p>This ticker is not in the watchlist and has no signals.</p>'
+            f'</div>'
+        )
+
+    # Build header
+    html = '<div class="mb-4">'
+    html += f'<h2>{ticker}'
+    if signal:
+        conf_color = "bg-success" if signal.confidence >= 70 else "bg-warning" if signal.confidence >= 55 else "bg-secondary"
+        html += f' <span class="badge {conf_color}">{signal.confidence}% confidence</span>'
+        html += f' <span class="badge bg-primary">{signal.direction}</span>'
+    html += '</h2>'
+    if wl:
+        html += f'<span class="badge bg-secondary">{wl.thesis_category}</span>'
+    html += '</div>'
+
+    # === Watchlist Thesis ===
+    if wl:
+        html += (
+            '<div class="card bg-dark border-secondary mb-4">'
+            '<div class="card-header"><h5 class="mb-0">Short Thesis</h5></div>'
+            '<div class="card-body">'
+            f'<p class="mb-0">{wl.thesis_text}</p>'
+            '</div></div>'
+        )
+
+    # === Signal Reasoning ===
+    if signal:
+        reasoning = signal.reasoning if isinstance(signal.reasoning, dict) else {}
+        thesis_summary = reasoning.get("thesis", "")
+        catalysts = reasoning.get("catalysts", [])
+        risks = reasoning.get("risks", [])
+
+        # Thesis summary from signal
+        if thesis_summary:
+            html += (
+                '<div class="card bg-dark border-secondary mb-4">'
+                '<div class="card-header"><h5 class="mb-0">Signal Thesis</h5></div>'
+                '<div class="card-body">'
+                f'<p class="mb-0">{thesis_summary}</p>'
+                '</div></div>'
+            )
+
+        # Catalysts and Risks side by side
+        html += '<div class="row g-3 mb-4">'
+
+        # Catalysts
+        html += '<div class="col-md-6">'
+        html += (
+            '<div class="card bg-dark border-warning h-100">'
+            '<div class="card-header"><h6 class="mb-0 text-warning">Catalysts</h6></div>'
+            '<div class="card-body">'
+        )
+        if catalysts:
+            html += '<ul class="mb-0">'
+            for c in catalysts:
+                html += f'<li>{c}</li>'
+            html += '</ul>'
+        else:
+            html += '<span class="text-muted">No catalysts listed</span>'
+        html += '</div></div></div>'
+
+        # Risks
+        html += '<div class="col-md-6">'
+        html += (
+            '<div class="card bg-dark border-danger h-100">'
+            '<div class="card-header"><h6 class="mb-0 text-danger">Risks</h6></div>'
+            '<div class="card-body">'
+        )
+        if risks:
+            html += '<ul class="mb-0">'
+            for r in risks:
+                html += f'<li>{r}</li>'
+            html += '</ul>'
+        else:
+            html += '<span class="text-muted">No risks listed</span>'
+        html += '</div></div></div>'
+
+        # Near-term catalyst
+        if signal.catalyst:
+            html += (
+                '<div class="card bg-dark border-info mb-4">'
+                '<div class="card-header"><h6 class="mb-0 text-info">Near-Term Catalyst</h6></div>'
+                '<div class="card-body">'
+                f'<p class="mb-0">{signal.catalyst}</p>'
+                '</div></div>'
+            )
+
+        # Trade setup
+        html += (
+            '<div class="card bg-dark border-secondary mb-4">'
+            '<div class="card-header"><h5 class="mb-0">Trade Setup</h5></div>'
+            '<div class="card-body">'
+            '<div class="row g-3">'
+            '<div class="col-4 text-center">'
+            '<div class="text-muted small">Entry</div>'
+            f'<div class="fw-bold">${signal.entry_price:,.2f}</div>'
+            '</div>'
+            '<div class="col-4 text-center">'
+            '<div class="text-muted small">Stop Loss</div>'
+            f'<div class="fw-bold text-danger">${signal.stop_loss:,.2f}</div>'
+            '</div>'
+            '<div class="col-4 text-center">'
+            '<div class="text-muted small">Target</div>'
+            f'<div class="fw-bold text-success">${signal.target:,.2f}</div>'
+            '</div>'
+            '</div>'
+        )
+
+        # Risk/reward ratio
+        risk_per_share = signal.stop_loss - signal.entry_price
+        reward_per_share = signal.entry_price - signal.target
+        if risk_per_share > 0:
+            rr_ratio = reward_per_share / risk_per_share
+            html += (
+                '<div class="text-center mt-3">'
+                '<span class="text-muted">Risk/Reward:</span> '
+                f'<span class="fw-bold">1:{rr_ratio:.1f}</span>'
+                ' &middot; <span class="text-muted">Horizon:</span> '
+                f'<span class="fw-bold">{signal.time_horizon_days} days</span>'
+                '</div>'
+            )
+
+        html += '</div></div>'
+
+    # === Squeeze Risk ===
+    if wl:
+        sq = classify_squeeze_risk(wl.short_interest_pct, wl.days_to_cover, wl.borrow_rate_annual, wl.prev_borrow_rate)
+        html += (
+            '<div class="card bg-dark border-secondary mb-4">'
+            '<div class="card-header"><h5 class="mb-0">Squeeze Risk</h5></div>'
+            '<div class="card-body">'
+            '<div class="d-flex justify-content-between align-items-center mb-3">'
+            '<span>Overall:</span>'
+            f'{_squeeze_badge(sq.level.name)}'
+            '</div>'
+            '<div class="d-flex flex-column gap-2 small">'
+            '<div class="d-flex justify-content-between">'
+            '<span class="text-muted">Short Interest:</span>'
+            f'<span>{wl.short_interest_pct}% {_squeeze_badge(sq.si_level.name)}</span>'
+            '</div>'
+            '<div class="d-flex justify-content-between">'
+            '<span class="text-muted">Days to Cover:</span>'
+            f'<span>{wl.days_to_cover} {_squeeze_badge(sq.dtc_level.name)}</span>'
+            '</div>'
+            '<div class="d-flex justify-content-between">'
+            '<span class="text-muted">Cost to Borrow:</span>'
+            f'<span>{wl.borrow_rate_annual}% {_squeeze_badge(sq.ctb_level.name)}</span>'
+            '</div>'
+            '<div class="d-flex justify-content-between">'
+            '<span class="text-muted">CTB Spike:</span>'
+            f'{_squeeze_badge(sq.ctb_spike_level.name)}'
+            '</div>'
+            '</div>'
+            '</div></div>'
+        )
+
+    # === Action button ===
+    html += (
+        '<div class="text-center">'
+        f'<a href="/trade?ticker={ticker}" class="btn btn-warning btn-lg">Open Short Position</a>'
+        '</div>'
+    )
+
     return HTMLResponse(html)
