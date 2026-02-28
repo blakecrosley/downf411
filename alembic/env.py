@@ -11,8 +11,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Use sync psycopg for migrations (not asyncpg)
-sync_url = settings.DATABASE_URL.replace("+asyncpg", "")
+# Use sync psycopg (v3) for migrations
+url = settings.DATABASE_URL
+if "+asyncpg" in url:
+    url = url.replace("+asyncpg", "+psycopg")
+elif url.startswith("postgresql://"):
+    url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+sync_url = url
 config.set_main_option("sqlalchemy.url", sync_url)
 
 target_metadata = Base.metadata
