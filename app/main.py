@@ -16,10 +16,19 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.scheduler import configure_scheduler
+
     container = ServiceContainer(settings=settings, session_factory=async_session_factory)
     app.state.container = container
     logger.info("ServiceContainer initialized")
+
+    scheduler = configure_scheduler(container)
+    container.scheduler = scheduler
+    scheduler.start()
+    logger.info("Scheduler started")
+
     yield
+
     if container.scheduler:
         container.scheduler.shutdown(wait=False)
         logger.info("Scheduler shut down")
