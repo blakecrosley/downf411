@@ -2,10 +2,11 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import Settings, settings
 from app.container import ServiceContainer
@@ -51,6 +52,18 @@ def verify_password(credentials: HTTPBasicCredentials = Depends(security)) -> st
     return credentials.username
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
 def create_app(app_settings: Settings | None = None) -> FastAPI:
     deps = [Depends(verify_password)] if settings.APP_PASSWORD else []
 
@@ -66,6 +79,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     from app.api.v1.partials import router as partials_router
     from app.api.v1.pages import router as pages_router
     from app.api.v1.stream import router as stream_router
+
+    app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(api_router, prefix="/v1")
     app.include_router(partials_router, prefix="/v1/partials")
