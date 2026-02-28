@@ -9,8 +9,33 @@ function shortGame() {
             document.body.addEventListener('htmx:responseError', (e) => {
                 console.error('HTMX error:', e.detail);
             });
+
+            // Listen for SSE alert events — trigger confetti on milestones
+            document.body.addEventListener('htmx:sseMessage', (e) => {
+                try {
+                    const data = JSON.parse(e.detail.data);
+                    if (data.alert_type === 'MILESTONE_REACHED') {
+                        triggerConfetti();
+                    }
+                } catch (_) {}
+            });
         }
     };
+}
+
+function triggerConfetti() {
+    const colors = ['#ffc107', '#198754', '#0d6efd', '#dc3545', '#6f42c1'];
+    for (let i = 0; i < 30; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'confetti-particle';
+        particle.style.left = Math.random() * 100 + 'vw';
+        particle.style.top = '100vh';
+        particle.style.background = colors[Math.floor(Math.random() * colors.length)];
+        particle.style.animationDelay = Math.random() * 0.5 + 's';
+        particle.style.animationDuration = (1.5 + Math.random()) + 's';
+        document.body.appendChild(particle);
+        setTimeout(() => particle.remove(), 2500);
+    }
 }
 
 function tradeForm() {

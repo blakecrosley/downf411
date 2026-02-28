@@ -33,6 +33,19 @@ body {
     margin: 0;
 }
 
+.milestone-bar-distant {
+    background: #6c757d;
+}
+
+.milestone-bar-close {
+    background: #0d6efd;
+}
+
+.milestone-bar-imminent {
+    background: #198754;
+    box-shadow: 0 0 8px rgba(25, 135, 84, 0.5);
+}
+
 /* Stat cards */
 .stat-label {
     font-size: 0.75rem;

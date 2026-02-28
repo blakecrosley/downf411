@@ -117,7 +117,13 @@ async def milestone_bar(session: AsyncSession = Depends(get_session)):
         pct = 100
         label = "All milestones reached!"
 
-    color = "bg-info" if pct < 50 else "bg-success"
+    if pct < 50:
+        color = "milestone-bar-distant"
+    elif pct < 90:
+        color = "milestone-bar-close"
+    else:
+        color = "milestone-bar-imminent"
+
     return HTMLResponse(
         f'<div class="progress milestone-progress" title="{label}">'
         f'<div class="progress-bar {color}" style="width:{pct:.1f}%"></div>'
