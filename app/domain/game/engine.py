@@ -11,7 +11,6 @@ from app.config.settings import MILESTONES
 from app.db.models import Alert, Order, Portfolio, PortfolioSnapshot, Position, Trade
 from app.domain.game.risk_engine import RiskEngine
 from app.domain.game.rules.borrow_fee import daily_borrow_fee
-from app.domain.game.rules.liquidation import forced_liquidation_order
 from app.domain.game.rules.margin import initial_margin, margin_ratio
 from app.domain.market.schemas import Quote
 
@@ -218,8 +217,9 @@ class ShortGameEngine:
         remaining.sort(key=lambda p: (p.entry_price - p.current_price) * p.shares)
 
         for pos in remaining:
+            unrealized_pnl = (pos.entry_price - pos.current_price) * pos.shares
             ratio = margin_ratio(
-                cash=portfolio.cash,
+                cash=unrealized_pnl,
                 short_proceeds=pos.margin_deposited,
                 shares=pos.shares,
                 current_price=pos.current_price,
@@ -227,8 +227,6 @@ class ShortGameEngine:
             check = self.risk.check_maintenance(ratio)
 
             if check.liquidate:
-                liq_order = forced_liquidation_order(pos)
-                session.add(liq_order)
                 await self.close_short(
                     session, portfolio, pos, pos.current_price,
                     reason="Forced liquidation: margin ratio below 110%",

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -189,7 +189,7 @@ class DayTradeLog(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id"))
     ticker: Mapped[str] = mapped_column(String(10))
-    trade_date: Mapped[datetime] = mapped_column(Date)
+    trade_date: Mapped[date] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (
@@ -215,7 +215,7 @@ class PortfolioSnapshot(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     portfolio_id: Mapped[int] = mapped_column(ForeignKey("portfolios.id"))
-    date: Mapped[datetime] = mapped_column(Date)
+    date: Mapped[date] = mapped_column(Date)
     equity: Mapped[Decimal] = mapped_column(MONEY)
     cash: Mapped[Decimal] = mapped_column(MONEY)
     unrealized_pnl: Mapped[Decimal] = mapped_column(MONEY)

@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.v1.deps import get_session
 from app.config.settings import MILESTONES
@@ -28,7 +29,7 @@ def _pnl_class(val: Decimal) -> str:
 
 
 def _squeeze_badge(level: str) -> str:
-    colors = {"LOW": "bg-success", "MODERATE": "bg-info", "HIGH": "bg-warning", "CRITICAL": "bg-danger"}
+    colors = {"LOW": "bg-success", "MEDIUM": "bg-info", "HIGH": "bg-warning", "CRITICAL": "bg-danger"}
     cls = colors.get(level, "bg-secondary")
     return f'<span class="badge {cls}">{level}</span>'
 
@@ -178,7 +179,9 @@ async def positions_table(session: AsyncSession = Depends(get_session)):
         return HTMLResponse('<div class="text-center text-muted py-4">No portfolio found.</div>')
 
     positions = await session.scalars(
-        select(Position).where(Position.portfolio_id == portfolio.id, Position.status == "OPEN")
+        select(Position)
+        .where(Position.portfolio_id == portfolio.id, Position.status == "OPEN")
+        .options(selectinload(Position.watchlist_item))
     )
     rows = list(positions)
 
@@ -313,10 +316,10 @@ async def alert_toasts(session: AsyncSession = Depends(get_session)):
             auto_dismiss = ""
         elif a.priority == "WARNING":
             border = "border-warning"
-            auto_dismiss = ' hx-trigger="load delay:15s" hx-patch="/v1/alerts/{}/acknowledge" hx-swap="outerHTML"'.format(a.id)
+            auto_dismiss = ' hx-trigger="load delay:15s" hx-patch="/v1/alerts/{}/acknowledge" hx-swap="delete"'.format(a.id)
         else:
             border = "border-info"
-            auto_dismiss = ' hx-trigger="load delay:8s" hx-patch="/v1/alerts/{}/acknowledge" hx-swap="outerHTML"'.format(a.id)
+            auto_dismiss = ' hx-trigger="load delay:8s" hx-patch="/v1/alerts/{}/acknowledge" hx-swap="delete"'.format(a.id)
 
         html += (
             f'<div class="toast show border {border}" role="alert"{auto_dismiss}>'
@@ -324,7 +327,7 @@ async def alert_toasts(session: AsyncSession = Depends(get_session)):
             f'<strong class="me-auto">{a.alert_type}</strong>'
             f'<small>{a.priority}</small>'
             f'<button type="button" class="btn-close btn-close-white"'
-            f' hx-patch="/v1/alerts/{a.id}/acknowledge" hx-swap="outerHTML" hx-target="closest .toast"></button>'
+            f' hx-patch="/v1/alerts/{a.id}/acknowledge" hx-swap="delete" hx-target="closest .toast"></button>'
             f'</div>'
             f'<div class="toast-body">{a.message}</div>'
             f'</div>'
