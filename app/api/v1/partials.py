@@ -336,28 +336,44 @@ async def alert_toasts(session: AsyncSession = Depends(get_session)):
 
 @router.get("/prediction-accuracy")
 async def prediction_accuracy(session: AsyncSession = Depends(get_session)):
-    total = await session.scalar(
-        select(func.count()).select_from(Prediction).where(Prediction.outcome_correct.isnot(None))
-    )
-    correct = await session.scalar(
-        select(func.count()).select_from(Prediction).where(Prediction.outcome_correct.is_(True))
-    )
+    from app.domain.prediction.tracker import get_engine_accuracy
 
-    if not total or total == 0:
+    accuracy = await get_engine_accuracy(session)
+
+    # Check if any engine has data
+    has_data = any(v["total"] > 0 for v in accuracy.values())
+    if not has_data:
         return HTMLResponse('<div class="text-muted">No evaluated predictions yet.</div>')
 
-    pct = correct / total * 100
-    return HTMLResponse(
-        f'<div class="d-flex flex-column gap-2">'
-        f'<div class="d-flex justify-content-between">'
-        f'<span>Claude:</span>'
-        f'<span class="fw-bold">{correct}/{total} correct ({pct:.0f}%)</span>'
-        f'</div>'
-        f'<div class="progress" style="height: 8px;">'
-        f'<div class="progress-bar bg-primary" style="width:{pct:.0f}%"></div>'
-        f'</div>'
-        f'</div>'
-    )
+    html = '<div class="d-flex flex-column gap-2">'
+
+    # Ensemble first (primary)
+    ens = accuracy.get("ensemble", {"correct": 0, "total": 0, "pct": 0})
+    if ens["total"] > 0:
+        html += (
+            f'<div class="d-flex justify-content-between">'
+            f'<span class="fw-bold">Ensemble:</span>'
+            f'<span class="fw-bold">{ens["correct"]}/{ens["total"]} correct ({ens["pct"]:.0f}%)</span>'
+            f'</div>'
+            f'<div class="progress mb-2" style="height: 8px;">'
+            f'<div class="progress-bar bg-primary" style="width:{ens["pct"]:.0f}%"></div>'
+            f'</div>'
+        )
+
+    # Per-engine breakdown
+    for engine in ["claude", "quant"]:
+        data = accuracy.get(engine, {"correct": 0, "total": 0, "pct": 0})
+        if data["total"] > 0:
+            label = engine.capitalize()
+            html += (
+                f'<div class="d-flex justify-content-between small text-muted">'
+                f'<span>{label}:</span>'
+                f'<span>{data["correct"]}/{data["total"]} ({data["pct"]:.0f}%)</span>'
+                f'</div>'
+            )
+
+    html += '</div>'
+    return HTMLResponse(html)
 
 
 # === Win streak ===
