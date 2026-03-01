@@ -426,16 +426,20 @@ async def briefing_full(session: AsyncSession = Depends(get_session)):
     for item in (briefing.top_3 or [])[:3]:
         ticker = item.get("ticker", "??")
         conf = item.get("confidence", 0)
-        catalyst = item.get("catalyst", "")
+        setup = item.get("setup", "") or item.get("catalyst", "")
+        risk = item.get("risk", "")
         entry = item.get("entry", "")
         target = item.get("target", "")
+        price_line = f'<p class="card-text small text-muted">Entry ${entry} &rarr; Target ${target}</p>' if entry else ""
+        risk_line = f'<p class="card-text small text-warning">Risk: {risk}</p>' if risk else ""
         top3_html += (
             f'<div class="col-md-4">'
             f'<div class="card bg-dark border-secondary h-100">'
             f'<div class="card-body">'
             f'<h6 class="card-title">{ticker} <span class="badge bg-primary">{conf}%</span></h6>'
-            f'<p class="card-text small">{catalyst}</p>'
-            f'<p class="card-text small text-muted">Entry ${entry} &rarr; Target ${target}</p>'
+            f'<p class="card-text small">{setup}</p>'
+            f'{price_line}'
+            f'{risk_line}'
             f'</div>'
             f'<div class="card-footer d-flex gap-2">'
             f'<a href="/signal/{ticker}" class="btn btn-outline-light btn-sm flex-grow-1">View Thesis</a>'
@@ -447,8 +451,13 @@ async def briefing_full(session: AsyncSession = Depends(get_session)):
     # Avoid list
     avoid_html = ""
     avoid = briefing.avoid_list if isinstance(briefing.avoid_list, list) else []
-    for ticker in avoid:
-        avoid_html += f'<span class="badge bg-danger me-1">{ticker}</span>'
+    for item in avoid:
+        if isinstance(item, dict):
+            ticker = item.get("ticker", "")
+            reason = item.get("reason", "")
+            avoid_html += f'<span class="badge bg-danger me-1">{ticker}: {reason}</span>'
+        else:
+            avoid_html += f'<span class="badge bg-danger me-1">{item}</span>'
 
     created = briefing.created_at.strftime("%b %d, %Y %H:%M ET") if briefing.created_at else ""
 
