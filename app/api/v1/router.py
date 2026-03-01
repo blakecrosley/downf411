@@ -12,15 +12,17 @@ from app.api.v1.deps import get_container, get_session
 from app.config.settings import MILESTONES
 from app.container import ServiceContainer
 from app.db.models import (
-    Alert, Briefing, Portfolio, PortfolioSnapshot, Position, Signal, Trade, Watchlist,
+    Alert, Briefing, Portfolio, PortfolioSnapshot, Position, ScreenCandidate, Signal, Trade, Watchlist,
 )
 from app.domain.game.engine import ShortGameEngine
 from app.domain.game.risk_engine import RiskEngine
 from app.domain.game.rules.squeeze import classify_squeeze_risk
 from app.schemas.api import (
-    AlertResponse, ApiResponse, BriefingApiResponse, ErrorDetail, ErrorResponse,
-    PortfolioResponse, PositionResponse, PreflightResponse, SignalResponse,
-    SnapshotResponse, TradeResponse, TradeStatsResponse, WatchlistResponse,
+    AlertResponse, BriefingApiResponse, CandidatePromoteRequest,
+    PortfolioResponse, PositionResponse,
+    PreflightResponse, ScreenCandidateResponse, SignalResponse, SnapshotResponse,
+    TradeResponse, TradeStatsResponse, WatchlistCreateRequest, WatchlistResponse,
+    WatchlistUpdateRequest,
 )
 
 router = APIRouter()
@@ -466,6 +468,83 @@ async def get_trade_stats(session: AsyncSession = Depends(get_session)):
     return _envelope(data.model_dump())
 
 
+# === Scan ===
+
+@router.post("/scan/trigger")
+async def trigger_scan(
+    session: AsyncSession = Depends(get_session),
+    container: ServiceContainer = Depends(get_container),
+):
+    """Trigger quant-only scan for all watchlist tickers. No AI analysis."""
+    items = await session.scalars(select(Watchlist).where(Watchlist.active.is_(True)))
+    watchlist_items = list(items)
+
+    if not watchlist_items:
+        raise _error("NO_WATCHLIST", "No active watchlist tickers", 400)
+
+    from app.domain.prediction.technicals import compute_technicals
+    from app.domain.prediction.engines.quant_engine import QuantEngine
+    from app.domain.prediction.engines.base import TickerScanContext
+    from app.domain.game.rules.squeeze import classify_squeeze_risk as _classify_squeeze
+
+    quant = QuantEngine()
+    results = []
+
+    for item in watchlist_items:
+        try:
+            candles = await container.finnhub.get_candles(item.ticker)
+            quote = await container.finnhub.get_quote(item.ticker)
+        except Exception:
+            results.append({"ticker": item.ticker, "error": "market data unavailable"})
+            continue
+
+        if not candles or not quote:
+            results.append({"ticker": item.ticker, "error": "missing candles or quote"})
+            continue
+
+        closes = [float(bar.close) for bar in candles]
+        while len(closes) < 20:
+            closes.insert(0, closes[0])
+
+        technicals = compute_technicals(closes)
+        squeeze = _classify_squeeze(
+            item.short_interest_pct, item.days_to_cover,
+            item.borrow_rate_annual, item.prev_borrow_rate,
+        )
+        volumes = [bar.volume for bar in candles]
+        avg_vol = int(sum(volumes) / len(volumes)) if volumes else 0
+
+        context = TickerScanContext(
+            ticker=item.ticker, category=item.thesis_category,
+            thesis=item.thesis_text, quote=quote, candles=candles,
+            technicals=technicals, squeeze_score=squeeze.score,
+            squeeze_level=squeeze.level.name, data_quality="PARTIAL",
+            avg_volume_20d=avg_vol,
+        )
+
+        signal = await quant.generate_signal(context)
+        if signal:
+            db_signal = Signal(
+                ticker=signal.ticker, signal_type="quant_refresh",
+                direction=signal.direction.value, confidence=signal.confidence,
+                entry_price=signal.entry_price, stop_loss=signal.stop_loss,
+                target=signal.target, time_horizon_days=signal.time_horizon_days,
+                reasoning=signal.reasoning, catalyst="",
+                schema_version="v1", data_quality=signal.data_quality,
+                engine_source="quant",
+            )
+            session.add(db_signal)
+            results.append({
+                "ticker": signal.ticker, "direction": signal.direction.value,
+                "confidence": signal.confidence, "entry_price": str(signal.entry_price),
+            })
+        else:
+            results.append({"ticker": item.ticker, "error": "no signal generated"})
+
+    await session.commit()
+    return _envelope({"scanned": len(results), "results": results})
+
+
 # === Watchlist ===
 
 @router.get("/watchlist")
@@ -476,8 +555,169 @@ async def get_watchlist(session: AsyncSession = Depends(get_session)):
             id=w.id, ticker=w.ticker, thesis_category=w.thesis_category,
             thesis_text=w.thesis_text, short_interest_pct=w.short_interest_pct,
             days_to_cover=w.days_to_cover, borrow_rate_annual=w.borrow_rate_annual,
-            active=w.active,
+            active=w.active, source=w.source,
+            removed_at=w.removed_at.isoformat() if w.removed_at else None,
+            removal_reason=w.removal_reason,
         ).model_dump()
         for w in items
     ]
     return _envelope(data)
+
+
+@router.post("/watchlist")
+async def create_watchlist_item(
+    body: WatchlistCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    existing = await session.scalar(select(Watchlist).where(Watchlist.ticker == body.ticker))
+    if existing:
+        if existing.active:
+            raise _error("DUPLICATE", f"{body.ticker} already in watchlist", 409)
+        # Reactivate a previously retired ticker
+        existing.active = True
+        existing.removed_at = None
+        existing.removal_reason = None
+        existing.thesis_category = body.thesis_category
+        existing.thesis_text = body.thesis_text
+        await session.commit()
+        return _envelope({"ticker": body.ticker, "reactivated": True})
+
+    item = Watchlist(
+        ticker=body.ticker,
+        thesis_category=body.thesis_category,
+        thesis_text=body.thesis_text,
+        short_interest_pct=Decimal("0"),
+        days_to_cover=Decimal("0"),
+        borrow_rate_annual=Decimal("0"),
+        prev_borrow_rate=Decimal("0"),
+        source="manual",
+    )
+    session.add(item)
+    await session.commit()
+    return _envelope({"ticker": body.ticker, "id": item.id})
+
+
+@router.patch("/watchlist/{ticker}")
+async def update_watchlist_item(
+    ticker: str,
+    body: WatchlistUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    item = await session.scalar(select(Watchlist).where(Watchlist.ticker == ticker.upper()))
+    if not item:
+        raise _error("NOT_FOUND", f"{ticker} not in watchlist", 404)
+
+    if body.thesis_category is not None:
+        item.thesis_category = body.thesis_category
+    if body.thesis_text is not None:
+        item.thesis_text = body.thesis_text
+    if body.active is not None:
+        item.active = body.active
+
+    await session.commit()
+    return _envelope({"ticker": ticker.upper(), "updated": True})
+
+
+@router.delete("/watchlist/{ticker}")
+async def retire_watchlist_item(
+    ticker: str,
+    reason: str = Query(default="manual removal"),
+    session: AsyncSession = Depends(get_session),
+):
+    item = await session.scalar(
+        select(Watchlist).where(Watchlist.ticker == ticker.upper(), Watchlist.active.is_(True))
+    )
+    if not item:
+        raise _error("NOT_FOUND", f"Active ticker {ticker} not in watchlist", 404)
+
+    item.active = False
+    item.removed_at = datetime.now(UTC)
+    item.removal_reason = reason
+    await session.commit()
+    return _envelope({"ticker": ticker.upper(), "retired": True, "reason": reason})
+
+
+# === Screen Candidates ===
+
+@router.get("/candidates")
+async def get_candidates(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=20, le=100),
+    session: AsyncSession = Depends(get_session),
+):
+    query = select(ScreenCandidate).order_by(desc(ScreenCandidate.screen_score)).limit(limit)
+    if status:
+        query = query.where(ScreenCandidate.status == status)
+
+    candidates = await session.scalars(query)
+    data = [
+        ScreenCandidateResponse(
+            id=c.id, ticker=c.ticker, source=c.source,
+            screen_score=c.screen_score, qual_score=c.qual_score,
+            short_interest_pct=c.short_interest_pct,
+            market_cap=c.market_cap, avg_volume=c.avg_volume,
+            pe_ratio=c.pe_ratio, momentum_20d=c.momentum_20d,
+            analyst_consensus=c.analyst_consensus,
+            insider_sentiment=c.insider_sentiment,
+            eps_revision_pct=c.eps_revision_pct,
+            downgrade_count_90d=c.downgrade_count_90d,
+            price_target_gap_pct=c.price_target_gap_pct,
+            status=c.status,
+            qualified_at=c.qualified_at.isoformat() if c.qualified_at else None,
+            promoted_at=c.promoted_at.isoformat() if c.promoted_at else None,
+            rejection_reason=c.rejection_reason,
+            created_at=c.created_at.isoformat() if c.created_at else "",
+        ).model_dump()
+        for c in candidates
+    ]
+    return _envelope(data)
+
+
+@router.post("/candidates/{ticker}/promote")
+async def promote_candidate(
+    ticker: str,
+    body: CandidatePromoteRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    candidate = await session.scalar(
+        select(ScreenCandidate).where(ScreenCandidate.ticker == ticker.upper())
+    )
+    if not candidate:
+        raise _error("NOT_FOUND", f"Candidate {ticker} not found", 404)
+    if candidate.status == "promoted":
+        raise _error("ALREADY_PROMOTED", f"{ticker} already promoted", 409)
+
+    # Check watchlist for existing entry
+    existing = await session.scalar(select(Watchlist).where(Watchlist.ticker == ticker.upper()))
+    if existing and existing.active:
+        raise _error("DUPLICATE", f"{ticker} already in active watchlist", 409)
+
+    now = datetime.now(UTC)
+    candidate.status = "promoted"
+    candidate.promoted_at = now
+
+    if existing:
+        # Reactivate
+        existing.active = True
+        existing.removed_at = None
+        existing.removal_reason = None
+        existing.thesis_category = body.thesis_category
+        existing.thesis_text = body.thesis_text
+        existing.source = "screen_pipeline"
+        existing.screen_candidate_id = candidate.id
+    else:
+        item = Watchlist(
+            ticker=ticker.upper(),
+            thesis_category=body.thesis_category,
+            thesis_text=body.thesis_text,
+            short_interest_pct=candidate.short_interest_pct,
+            days_to_cover=Decimal("0"),
+            borrow_rate_annual=Decimal("0"),
+            prev_borrow_rate=Decimal("0"),
+            source="screen_pipeline",
+            screen_candidate_id=candidate.id,
+        )
+        session.add(item)
+
+    await session.commit()
+    return _envelope({"ticker": ticker.upper(), "promoted": True})

@@ -1,6 +1,8 @@
 """APScheduler configuration — all scheduled jobs for Short Game."""
 
+import asyncio
 import logging
+import sys
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -88,6 +90,30 @@ async def _mark_to_market_job(container: ServiceContainer) -> None:
             logger.info("Mark-to-market complete: %d alerts", len(alerts))
 
 
+async def _screening_job(container: ServiceContainer, command: str) -> None:
+    """Run screening pipeline CLI as subprocess (screen or qualify)."""
+    db_url = container.settings.DATABASE_URL
+    # Strip asyncpg driver prefix for psycopg
+    if "+asyncpg" in db_url:
+        db_url = db_url.replace("+asyncpg", "")
+    finnhub_key = container.settings.FINNHUB_API_KEY
+
+    logger.info("Scheduled job: screening pipeline '%s' starting", command)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "scripts/run_screen.py", db_url, finnhub_key, command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if stdout:
+        for line in stdout.decode().strip().splitlines():
+            logger.info("[screen:%s] %s", command, line)
+    if proc.returncode != 0:
+        logger.error("Screening '%s' failed (rc=%d): %s", command, proc.returncode, stderr.decode())
+    else:
+        logger.info("Screening '%s' completed successfully", command)
+
+
 def configure_scheduler(container: ServiceContainer) -> AsyncIOScheduler:
     """Create and configure the APScheduler with all cron jobs."""
     scheduler = AsyncIOScheduler()
@@ -133,6 +159,28 @@ def configure_scheduler(container: ServiceContainer) -> AsyncIOScheduler:
         id="mark_to_market",
         name="Mark-to-market cycle",
         misfire_grace_time=300,
+        coalesce=True,
+    )
+
+    # 5. Weekly screen: Sunday 20:00 ET — discover new short candidates
+    scheduler.add_job(
+        _screening_job,
+        CronTrigger(day_of_week="sun", hour=20, minute=0, timezone=ET),
+        args=[container, "screen"],
+        id="weekly_screen",
+        name="Weekly screening pipeline",
+        misfire_grace_time=3600,
+        coalesce=True,
+    )
+
+    # 6. Daily qualify: 05:00 ET — enrich top candidates with fundamentals
+    scheduler.add_job(
+        _screening_job,
+        CronTrigger(hour=5, minute=0, timezone=ET),
+        args=[container, "qualify"],
+        id="daily_qualify",
+        name="Daily candidate qualification",
+        misfire_grace_time=3600,
         coalesce=True,
     )
 

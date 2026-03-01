@@ -154,3 +154,47 @@ class WatchlistResponse(BaseModel):
     days_to_cover: Decimal
     borrow_rate_annual: Decimal
     active: bool
+    source: str | None = None
+    removed_at: str | None = None
+    removal_reason: str | None = None
+
+
+class WatchlistCreateRequest(BaseModel):
+    ticker: str = Field(pattern=r"^[A-Z]{1,10}$")
+    thesis_category: str = Field(min_length=1, max_length=100)
+    thesis_text: str = Field(min_length=1)
+
+
+class WatchlistUpdateRequest(BaseModel):
+    thesis_category: str | None = Field(default=None, max_length=100)
+    thesis_text: str | None = None
+    active: bool | None = None
+
+
+# === Screen Candidates ===
+class ScreenCandidateResponse(BaseModel):
+    id: int
+    ticker: str
+    source: str
+    screen_score: Decimal
+    qual_score: Decimal | None
+    short_interest_pct: Decimal
+    market_cap: int | None
+    avg_volume: int | None
+    pe_ratio: Decimal | None
+    momentum_20d: Decimal | None
+    analyst_consensus: str | None
+    insider_sentiment: Decimal | None
+    eps_revision_pct: Decimal | None
+    downgrade_count_90d: int | None
+    price_target_gap_pct: Decimal | None
+    status: str
+    qualified_at: str | None
+    promoted_at: str | None
+    rejection_reason: str | None
+    created_at: str
+
+
+class CandidatePromoteRequest(BaseModel):
+    thesis_category: str = Field(min_length=1, max_length=100)
+    thesis_text: str = Field(min_length=1)

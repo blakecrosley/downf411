@@ -2,13 +2,14 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
-    JSON,
+    BigInteger,
     Boolean,
     Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -54,6 +55,40 @@ class Watchlist(Base):
     si_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    removal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str | None] = mapped_column(String(50), nullable=True, default="manual")
+    screen_candidate_id: Mapped[int | None] = mapped_column(ForeignKey("screen_candidates.id"), nullable=True)
+
+
+class ScreenCandidate(Base):
+    __tablename__ = "screen_candidates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), unique=True)
+    source: Mapped[str] = mapped_column(String(50))
+    screen_score: Mapped[Decimal] = mapped_column(Numeric(5, 1))
+    qual_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 1), nullable=True)
+    short_interest_pct: Mapped[Decimal] = mapped_column(MONEY)
+    market_cap: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    avg_volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    pe_ratio: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    momentum_20d: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    analyst_consensus: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    insider_sentiment: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    eps_revision_pct: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    downgrade_count_90d: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    price_target_gap_pct: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="screened")
+    qualified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+    __table_args__ = (
+        Index("ix_screen_candidates_status", "status"),
+        Index("ix_screen_candidates_screen_score", "screen_score"),
+    )
 
 
 class Position(Base):
