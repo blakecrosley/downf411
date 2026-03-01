@@ -126,26 +126,32 @@ class FinnhubAdapter:
         return quote
 
     async def get_candles(self, ticker: str, days: int = 20) -> list[Bar]:
-        now = int(datetime.now(UTC).timestamp())
-        start = int((datetime.now(UTC) - timedelta(days=days + 5)).timestamp())
+        """Fetch candle data via yfinance (Finnhub stock_candles is now premium-only)."""
+        import yfinance as yf
 
-        data = await self._call_with_retry(self._client.stock_candles, ticker, "D", start, now)
-        if not data or data.get("s") != "ok":
-            return []
-
-        bars = []
-        for i in range(len(data.get("c", []))):
-            bars.append(
-                Bar(
-                    date=datetime.fromtimestamp(data["t"][i], tz=UTC).strftime("%Y-%m-%d"),
-                    open=Decimal(str(data["o"][i])),
-                    high=Decimal(str(data["h"][i])),
-                    low=Decimal(str(data["l"][i])),
-                    close=Decimal(str(data["c"][i])),
-                    volume=int(data["v"][i]),
+        def _fetch() -> list[Bar]:
+            df = yf.download(ticker, period=f"{days + 5}d", interval="1d", progress=False)
+            if df.empty:
+                return []
+            bars = []
+            for date_idx, row in df.iterrows():
+                bars.append(
+                    Bar(
+                        date=date_idx.strftime("%Y-%m-%d"),
+                        open=Decimal(str(round(float(row[("Open", ticker)]), 4))),
+                        high=Decimal(str(round(float(row[("High", ticker)]), 4))),
+                        low=Decimal(str(round(float(row[("Low", ticker)]), 4))),
+                        close=Decimal(str(round(float(row[("Close", ticker)]), 4))),
+                        volume=int(row[("Volume", ticker)]),
+                    )
                 )
-            )
-        return bars[-days:]
+            return bars[-days:]
+
+        try:
+            return await asyncio.to_thread(_fetch)
+        except Exception as e:
+            logger.error("yfinance candle fetch failed for %s: %s", ticker, e)
+            return []
 
     async def get_news(self, ticker: str, days: int = 7, limit: int = 8) -> list[NewsItem]:
         today = datetime.now(UTC).strftime("%Y-%m-%d")
