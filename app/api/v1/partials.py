@@ -455,9 +455,20 @@ async def briefing_full(session: AsyncSession = Depends(get_session)):
         if isinstance(item, dict):
             ticker = item.get("ticker", "")
             reason = item.get("reason", "")
-            avoid_html += f'<span class="badge bg-danger me-1">{ticker}: {reason}</span>'
+            avoid_html += (
+                f'<li class="list-group-item bg-dark border-secondary d-flex align-items-start">'
+                f'<span class="badge bg-danger me-2 mt-1">{ticker}</span>'
+                f'<span class="text-light">{reason}</span>'
+                f'</li>'
+            )
         else:
-            avoid_html += f'<span class="badge bg-danger me-1">{item}</span>'
+            avoid_html += (
+                f'<li class="list-group-item bg-dark border-secondary">'
+                f'<span class="badge bg-danger me-2">{item}</span>'
+                f'</li>'
+            )
+    if avoid_html:
+        avoid_html = f'<ul class="list-group list-group-flush">{avoid_html}</ul>'
 
     created = briefing.created_at.strftime("%b %d, %Y %H:%M ET") if briefing.created_at else ""
 
