@@ -39,6 +39,37 @@ def round_price(val: float) -> Decimal:
     return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+# ── Event Catalyst Detection ──
+
+EVENT_KEYWORDS = [
+    "conference", "summit", "investor day", "investor meeting",
+    "presentation", "roadshow", "fireside chat", "analyst day",
+    "capital markets day", "capital markets", "keynote",
+    "investor event", "industry event", "participate",
+]
+
+
+def detect_event_catalysts(news: list[dict]) -> list[dict]:
+    """Scan news headlines for corporate events that cause temporary price pops.
+
+    These events (conferences, summits, roadshows) generate hype without
+    fundamental change — critical to track when shorting.
+    """
+    events = []
+    for article in news:
+        headline = article.get("headline", "").lower()
+        for keyword in EVENT_KEYWORDS:
+            if keyword in headline:
+                events.append({
+                    "headline": article.get("headline", ""),
+                    "source": article.get("source", ""),
+                    "datetime": article.get("datetime", ""),
+                    "keyword": keyword,
+                })
+                break
+    return events
+
+
 def compute_technicals(closes: list[float]) -> dict:
     """RSI-14, momentum 5/10/20d, annualized volatility."""
     assert len(closes) >= 20, f"Need >=20 closes, got {len(closes)}"
@@ -278,12 +309,16 @@ def fetch_ticker_data(client: finnhub.Client, ticker: str) -> dict:
             "eps_actual": e.get("actual"),
         }
 
+    # Event catalyst detection
+    event_catalysts = detect_event_catalysts(news) if news else []
+
     return {
         "quote": quote,
         "candles": candles,
         "news": news,
         "recommendation": recommendation,
         "earnings": earnings,
+        "event_catalysts": event_catalysts,
     }
 
 
@@ -352,6 +387,7 @@ def cmd_collect():
         news = data["news"]
         recommendation = data["recommendation"]
         earnings = data["earnings"]
+        event_catalysts = data["event_catalysts"]
 
         # Data quality
         dq = classify_data_quality(candles, quote, news, recommendation, earnings)
@@ -376,6 +412,14 @@ def cmd_collect():
         # Quant signal
         qs = quant_signal(quote["price"], technicals, quote["volume"], avg_volume)
 
+        # Inject event catalyst warning into quant reasoning
+        if event_catalysts:
+            event_names = [ev["keyword"] for ev in event_catalysts]
+            qs["reasoning"].insert(0, f"EVENT CATALYST: {', '.join(event_names)} — temporary pop risk, wait for fade")
+            qs["event_catalyst"] = True
+        else:
+            qs["event_catalyst"] = False
+
         # Print report
         print(f"Price: ${quote['price']:.2f} ({quote['change_pct']:+.2f}%)")
         print(f"Volume: {quote['volume']:,} | 20d Avg: {avg_volume:,}")
@@ -393,6 +437,14 @@ def cmd_collect():
         print(f"Squeeze Risk: {squeeze['level']} (score: {squeeze['score']})")
         print(f"  SI%: {squeeze['si']} | DTC: {squeeze['dtc']} | CTB: {squeeze['ctb']} | CTB Spike: {squeeze['ctb_spike']}")
         print()
+
+        if event_catalysts:
+            print(f"⚠ EVENT CATALYST DETECTED ({len(event_catalysts)}):")
+            for ev in event_catalysts:
+                print(f"  ▸ {ev['headline'][:90]}")
+                print(f"    Source: {ev['source']} | Date: {ev['datetime']} | Trigger: \"{ev['keyword']}\"")
+            print(f"  → Temporary price pop risk — do NOT enter new shorts until event fades")
+            print()
 
         if news:
             print(f"Recent News ({len(news)} articles):")
@@ -437,6 +489,7 @@ def cmd_collect():
             "avg_volume_20d": avg_volume,
             "quant_signal": qs,
             "news_count": len(news) if news else 0,
+            "event_catalysts": event_catalysts,
         })
 
         # Respect rate limits between tickers
@@ -448,7 +501,8 @@ def cmd_collect():
     print(f"{'═' * 72}")
     for r in all_results:
         qs = r["quant_signal"]
-        print(f"  {r['ticker']:5s}  ${r['quote']['price']:>9.2f}  Quant: {qs['direction']:5s} {qs['confidence']:2d}%  Squeeze: {r['squeeze']['level']}")
+        event_flag = " ⚠ EVENT" if r["event_catalysts"] else ""
+        print(f"  {r['ticker']:5s}  ${r['quote']['price']:>9.2f}  Quant: {qs['direction']:5s} {qs['confidence']:2d}%  Squeeze: {r['squeeze']['level']}{event_flag}")
     print()
     print("Awaiting Claude Opus 4.6 fundamental analysis + ensemble synthesis...")
 

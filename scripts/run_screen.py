@@ -51,6 +51,33 @@ def round_dec(val: float, places: str = "0.0001") -> Decimal:
     return Decimal(str(val)).quantize(Decimal(places), rounding=ROUND_HALF_UP)
 
 
+# ── Event Catalyst Detection ──
+
+EVENT_KEYWORDS = [
+    "conference", "summit", "investor day", "investor meeting",
+    "presentation", "roadshow", "fireside chat", "analyst day",
+    "capital markets day", "capital markets", "keynote",
+    "investor event", "industry event", "participate",
+]
+
+
+def detect_event_catalysts(news: list[dict]) -> list[dict]:
+    """Scan news headlines for corporate events that cause temporary price pops."""
+    events = []
+    for article in news:
+        headline = article.get("headline", "").lower()
+        for keyword in EVENT_KEYWORDS:
+            if keyword in headline:
+                events.append({
+                    "headline": article.get("headline", ""),
+                    "source": article.get("source", ""),
+                    "datetime": article.get("datetime", ""),
+                    "keyword": keyword,
+                })
+                break
+    return events
+
+
 def finnhub_retry(func, *args, **kwargs):
     """Retry Finnhub calls with backoff."""
     backoffs = (1, 2, 4)
@@ -394,6 +421,26 @@ def cmd_qualify():
                 print(f"  Price Target: ${target_median:.2f} median, last ${last_close:.2f} → gap {price_target_gap_pct:+.1f}%")
         time.sleep(1)
 
+        # 6. Event catalyst detection (company news scan)
+        news_raw = finnhub_retry(
+            client.company_news, ticker,
+            _from=(now - timedelta(days=14)).strftime("%Y-%m-%d"),
+            to=today,
+        )
+        if news_raw:
+            news_items = [
+                {"headline": a.get("headline", ""), "source": a.get("source", ""),
+                 "datetime": datetime.fromtimestamp(a.get("datetime", 0), tz=UTC).strftime("%Y-%m-%d")}
+                for a in news_raw[:15]
+            ]
+            events = detect_event_catalysts(news_items)
+            if events:
+                print(f"  ⚠ EVENT CATALYSTS ({len(events)}):")
+                for ev in events:
+                    print(f"    ▸ {ev['headline'][:80]} ({ev['datetime']})")
+                print(f"    → Temporary pop risk — factor into entry timing")
+        time.sleep(1)
+
         # Compute qual score
         qual_score = compute_qual_score(
             screen_score=float(screen_score),
@@ -467,9 +514,34 @@ def cmd_review():
     cur2.close()
     conn2.close()
 
+    # Live event detection — fetch news for all candidates
+    client = finnhub.Client(api_key=FINNHUB_KEY)
+    now = datetime.now(UTC)
+    today = now.strftime("%Y-%m-%d")
+    two_weeks_ago = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+    event_map: dict[str, list[dict]] = {}
+
+    tickers_to_check = [row[0] for row in candidates]
+    print(f"Scanning {len(tickers_to_check)} tickers for event catalysts...")
+    for ticker in tickers_to_check:
+        news_raw = finnhub_retry(client.company_news, ticker, _from=two_weeks_ago, to=today)
+        if news_raw:
+            news_items = [
+                {"headline": a.get("headline", ""), "source": a.get("source", ""),
+                 "datetime": datetime.fromtimestamp(a.get("datetime", 0), tz=UTC).strftime("%Y-%m-%d")}
+                for a in news_raw[:15]
+            ]
+            events = detect_event_catalysts(news_items)
+            if events:
+                event_map[ticker] = events
+        time.sleep(0.5)
+    print()
+
     print(f"{'═' * 80}")
     print(f"  SCREENING PIPELINE — Top {len(candidates)} Candidates")
-    print(f"  Generated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
+    print(f"  Generated: {now.strftime('%Y-%m-%d %H:%M UTC')}")
+    if event_map:
+        print(f"  ⚠ {len(event_map)} tickers have active event catalysts")
     print(f"{'═' * 80}")
     print()
 
@@ -480,8 +552,9 @@ def cmd_review():
 
         effective_score = qual_score if qual_score is not None else screen_score
         flag = " [ACTIVE]" if ticker in active_tickers else ""
+        event_flag = " ⚠ EVENT" if ticker in event_map else ""
 
-        print(f"#{i:2d}  {ticker:6s}  Score: {effective_score:5.1f}  Status: {status}{flag}")
+        print(f"#{i:2d}  {ticker:6s}  Score: {effective_score:5.1f}  Status: {status}{flag}{event_flag}")
 
         print(f"     SI%: {si_pct:.1f}%", end="")
         if market_cap:
@@ -511,6 +584,10 @@ def cmd_review():
                 parts.append(f"TargetGap: {price_target_gap:+.1f}%")
             if parts:
                 print(f"     {' | '.join(parts)}")
+
+        if ticker in event_map:
+            for ev in event_map[ticker]:
+                print(f"     ⚠ {ev['headline'][:75]} ({ev['datetime']})")
 
         print()
 
